@@ -9,6 +9,7 @@ Läuft als Express-Backend hinter Nginx unter `https://kodinitools.com/bild-stud
 server.js                        Express-Backend (API + statische Dateien)
 lib/adobe.js                     Adobe-Stock-Kategorien und CSV-Export
 lib/gallery.js                   Galerie: Bilder mit abgeleiteter Adobe-Kategorie (Ordner)
+lib/upload.js                    Eigene Bilder hochladen: Bildtyp prüfen, sicherer Dateiname
 test/                            Unit-Tests (node --test)
 deploy.sh                        Update/Deployment auf dem Server
 public/index.html                Startseite „Studio“: Prompt, Optionen, Batch-Warteschlange, Auftragsstatus
@@ -51,6 +52,14 @@ Auf dem Server installiert `deploy.sh` nur die Laufzeit-Abhängigkeiten (`npm ci
 | POST    | `/api/images/:fileName/export`   | Bild in ZIP/CSV aufnehmen oder ausschließen (`{ "include": true\|false }`)            |
 | GET     | `/api/gallery`                   | Alle Bilder (Sofort + Batch) mit Adobe-Kategorie; nur gespeicherter Stand             |
 | GET     | `/api/gallery/zip?category=<x>`  | Ordner als ZIP inkl. CSV (`all`, `none`, `1`–`21`; flach, ohne Unterordner)           |
+| POST    | `/api/uploads?name=<original>`   | Eigenes Bild hochladen (Body = Datei; JPEG/PNG/WebP, max. 50 MB)                      |
+| GET     | `/api/uploads/zip`               | Hochgeladene Bilder als ZIP inkl. Adobe-CSV                                           |
+| GET     | `/api/uploads/csv`               | Adobe-Stock-CSV der hochgeladenen Bilder                                              |
+
+Hochgeladene Bilder liegen wie alle anderen in `public/images/` und stehen in `single_images.json`
+mit `source: "upload"`. Metadaten, Ordner, Export-Ausschluss und Löschen funktionieren wie bei
+erzeugten Bildern. Nginx braucht dafür `client_max_body_size 50m;` im `location`-Block der App
+(Standard ist 1 MB, größere Dateien scheitern sonst mit HTTP 413).
 
 ## Einrichtung auf dem Server
 

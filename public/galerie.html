@@ -15,6 +15,31 @@
       </nav>
     </header>
 
+    <!-- Eigene Bilder hochladen: danach gleicher Weg wie erzeugte Bilder (Metadaten, Ordner, ZIP & CSV) -->
+    <div class="card">
+      <h3 style="margin-top: 0">Eigene Bilder hochladen</h3>
+      <div class="hint" style="margin-bottom: 10px">
+        JPEG, PNG oder WebP, höchstens 50 MB pro Datei. Gemini erzeugt dafür Titel, 25 Keywords und
+        Adobe-Kategorie; die Bilder erscheinen in den Ordnern und in ZIP & CSV für Adobe. Der
+        Dateiname wird für Adobe vereinfacht (z. B. „Möwe am Strand.jpg“ → „Moewe_am_Strand.jpg“).
+      </div>
+      <div class="row" style="align-items: center">
+        <input id="uploadInput" type="file" multiple accept="image/jpeg,image/png,image/webp" />
+        <label class="export-toggle" style="margin: 0">
+          <input id="uploadWithMeta" type="checkbox" checked />
+          Danach gleich Adobe-Metadaten erzeugen
+        </label>
+        <button id="uploadBtn" onclick="uploadFiles()">Hochladen</button>
+        <button
+          id="bulkMetaBtn"
+          class="secondary"
+          style="display: none"
+          onclick="generateMissingUploadMetadata()"
+        ></button>
+      </div>
+      <div id="uploadStatus" class="status-msg"></div>
+    </div>
+
     <!-- Kategorie-Ordner (automatisch aus der Adobe-Kategorie der Metadaten) -->
     <div class="card">
       <div class="row" style="justify-content: space-between; align-items: center">
@@ -99,6 +124,7 @@
         renderFolders();
         renderGrid();
         renderExports();
+        updateBulkMetaButton();
       }
 
       function renderFolders() {
@@ -216,6 +242,25 @@
             }
           </div>`);
         }
+        const uploads = exportCounts(gallery.images.filter((i) => i.source === 'upload'));
+        if (uploads.total) {
+          rows.push(`
+          <div class="job-row">
+            <div><strong>Hochgeladene eigene Bilder</strong>
+              <span style="font-size: 13px; color: #475569;">(${uploads.total} Bilder${excludedNote(uploads)})</span></div>
+            <div class="row" style="margin-bottom: 0">
+              ${
+                uploads.exportable
+                  ? `<a class="btn-link" href="api/uploads/zip" download>Als ZIP inkl. CSV (${uploads.exportable})</a>`
+                  : ''
+              }
+              <button class="success" onclick="downloadCsv('api/uploads/csv', 'adobe_stock_hochgeladen.csv')"
+                ${uploads.csv ? '' : 'disabled title="Erst Metadaten für mindestens ein Bild im Export erzeugen"'}>
+                CSV für Adobe Stock (${uploads.csv})
+              </button>
+            </div>
+          </div>`);
+        }
         for (const job of gallery.jobs) {
           const c = exportCounts(gallery.images.filter((i) => i.jobName === job.name));
           if (!c.total) continue;
@@ -270,7 +315,12 @@
       function renderImageCard(img) {
         // Alt-Einträge mit führendem Slash (/images/...) ebenfalls relativ machen
         const src = esc(String(img.imageUrl).replace(/^\//, ''));
-        const source = img.source === 'batch' ? `Batch: ${esc(img.jobName)}` : 'Sofort erstellt';
+        const source =
+          img.source === 'batch'
+            ? `Batch: ${esc(img.jobName)}`
+            : img.source === 'upload'
+              ? `Hochgeladen${img.originalName && img.originalName !== img.fileName ? ` (Original: ${esc(img.originalName)})` : ''}`
+              : 'Sofort erstellt';
         return `
         <div class="img-card${isExcluded(img) ? ' excluded' : ''}" data-file="${esc(img.fileName)}">
           <a href="${src}" target="_blank"><img src="${src}" alt="${esc(img.fileName)}" loading="lazy" decoding="async" /></a>
@@ -359,6 +409,17 @@
         return gallery.images.find((i) => i.fileName === fileName);
       };
 
+      // Metadaten bei Gemini erzeugen und im Galerie-Stand übernehmen (Server speichert sie)
+      async function requestMetadata(img) {
+        const m = await postJson('api/adobe-metadata', {
+          fileName: img.fileName,
+          jobName: img.jobName,
+        });
+        img.metadata = m;
+        img.categoryId = m.categoryId ?? null;
+        return m;
+      }
+
       async function fetchMetadata(btn) {
         const card = btn.closest('.img-card');
         const img = imageOf(btn);
@@ -367,12 +428,8 @@
         btn.disabled = true;
         box.innerHTML = '<em>Analysiere Bild mit Gemini Flash...</em>';
         try {
-          const m = await postJson('api/adobe-metadata', {
-            fileName: img.fileName,
-            jobName: img.jobName,
-          });
-          img.metadata = m;
-          img.categoryId = m.categoryId ?? null;
+          const m = await requestMetadata(img);
+          updateBulkMetaButton();
           box.innerHTML = formatMetaHtml(m, img.categoryId);
           btn.textContent = 'Metadaten neu generieren';
           // Ordnerzähler, Export-Schalter (Prüfhinweis kann sich geändert haben) und
@@ -414,9 +471,16 @@
       }
 
       // CSV wird serverseitig erzeugt (identisch zur CSV im Batch-ZIP)
-      async function exportBatchCsv(jobName) {
+      function exportBatchCsv(jobName) {
+        return downloadCsv(
+          `api/batch/csv?job=${encodeURIComponent(jobName)}`,
+          `adobe_stock_${jobName.replace(/\W/g, '_')}.csv`,
+        );
+      }
+
+      async function downloadCsv(url, fileName) {
         try {
-          const res = await fetch(`api/batch/csv?job=${encodeURIComponent(jobName)}`);
+          const res = await fetch(url);
           if (!res.ok) {
             let message = `HTTP ${res.status}`;
             try {
@@ -429,12 +493,125 @@
           const blob = await res.blob();
           const link = document.createElement('a');
           link.href = URL.createObjectURL(blob);
-          link.download = `adobe_stock_${jobName.replace(/\W/g, '_')}.csv`;
+          link.download = fileName;
           link.click();
           URL.revokeObjectURL(link.href);
         } catch (err) {
           setStatus('CSV-Export: ' + err.message);
         }
+      }
+
+      // ---------------------------------------------------------------------
+      // Eigene Bilder hochladen
+      // ---------------------------------------------------------------------
+      const MAX_UPLOAD_MB = 50; // wie MAX_UPLOAD_BYTES in lib/upload.js
+      let uploading = false;
+      let bulkRunning = false;
+
+      function setUploadStatus(html) {
+        document.getElementById('uploadStatus').innerHTML = html;
+      }
+
+      // Nginx antwortet bei zu großen Dateien mit einer HTML-Seite (HTTP 413)
+      function uploadErrorText(err) {
+        return /HTTP 413/.test(err.message)
+          ? `Datei zu groß für den Webserver (Nginx: client_max_body_size erhöhen, höchstens ${MAX_UPLOAD_MB} MB).`
+          : err.message;
+      }
+
+      async function uploadFiles() {
+        if (uploading) return;
+        const input = document.getElementById('uploadInput');
+        const files = [...input.files];
+        if (!files.length) {
+          setUploadStatus('Bitte zuerst Bilder auswählen.');
+          return;
+        }
+        uploading = true;
+        const btn = document.getElementById('uploadBtn');
+        btn.disabled = true;
+        const uploaded = [];
+        const errors = [];
+        try {
+          // Nacheinander: eine große Datei blockiert nicht alle anderen, Fortschritt ist sichtbar
+          for (const [i, file] of files.entries()) {
+            setUploadStatus(`Lade hoch: ${i + 1} von ${files.length} – ${esc(file.name)}`);
+            if (file.size > MAX_UPLOAD_MB * 1024 * 1024) {
+              errors.push(`${file.name}: größer als ${MAX_UPLOAD_MB} MB`);
+              continue;
+            }
+            try {
+              const res = await api(`api/uploads?name=${encodeURIComponent(file.name)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': file.type || 'application/octet-stream' },
+                body: file,
+              });
+              uploaded.push(res.fileName);
+            } catch (err) {
+              errors.push(`${file.name}: ${uploadErrorText(err)}`);
+            }
+          }
+          input.value = '';
+          await loadGallery();
+        } finally {
+          uploading = false;
+          btn.disabled = false;
+        }
+
+        const summary = `${uploaded.length} von ${files.length} ${files.length === 1 ? 'Bild' : 'Bildern'} hochgeladen.`;
+        const errorHtml = errors.length
+          ? `<div class="warn">${errors.map(esc).join('<br/>')}</div>`
+          : '';
+        setUploadStatus(esc(summary) + errorHtml);
+        if (uploaded.length && document.getElementById('uploadWithMeta').checked) {
+          await generateMetadataFor(uploaded, esc(summary) + errorHtml);
+        }
+      }
+
+      const missingUploadMetadata = () =>
+        gallery.images.filter((i) => i.source === 'upload' && !i.metadata);
+
+      function updateBulkMetaButton() {
+        const btn = document.getElementById('bulkMetaBtn');
+        const count = missingUploadMetadata().length;
+        btn.textContent = `Fehlende Metadaten erzeugen (${count})`;
+        btn.style.display = count ? '' : 'none';
+        btn.disabled = bulkRunning;
+      }
+
+      function generateMissingUploadMetadata() {
+        return generateMetadataFor(missingUploadMetadata().map((i) => i.fileName));
+      }
+
+      // Erzeugt Metadaten nacheinander (eine Gemini-Abfrage nach der anderen)
+      async function generateMetadataFor(fileNames, prefixHtml = '') {
+        if (bulkRunning) return;
+        bulkRunning = true;
+        updateBulkMetaButton();
+        const errors = [];
+        let done = 0;
+        try {
+          for (const [i, fileName] of fileNames.entries()) {
+            const img = gallery.images.find((x) => x.fileName === fileName);
+            if (!img) continue;
+            setUploadStatus(
+              `${prefixHtml}<div>Erzeuge Adobe-Metadaten: ${i + 1} von ${fileNames.length} – ${esc(fileName)}</div>`,
+            );
+            try {
+              await requestMetadata(img);
+              done++;
+            } catch (err) {
+              errors.push(`${fileName}: ${err.message}`);
+            }
+          }
+        } finally {
+          bulkRunning = false;
+        }
+        await loadGallery();
+        setUploadStatus(
+          `${prefixHtml}<div>Metadaten für ${done} von ${fileNames.length} ${fileNames.length === 1 ? 'Bild' : 'Bildern'} erzeugt. Die Bilder sind in die Ordner einsortiert.</div>` +
+            (errors.length ? `<div class="warn">${errors.map(esc).join('<br/>')}</div>` : ''),
+        );
       }
 
       // Fragt fertige Batch-Aufträge bei Gemini ab (dieselbe Abfrage wie „Status & Bilder
