@@ -127,6 +127,41 @@
         font-size: 12px;
         margin-top: 6px;
       }
+      .prompt-box {
+        background: #fff;
+        border: 1px solid #e2e8f0;
+        border-radius: 4px;
+        padding: 6px 8px;
+        margin-bottom: 8px;
+        font-size: 12px;
+        color: #334155;
+      }
+      .prompt-box .prompt-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 2px;
+        color: #64748b;
+        font-weight: 600;
+      }
+      .prompt-box .prompt-text {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        display: -webkit-box;
+        -webkit-line-clamp: 4;
+        line-clamp: 4;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        cursor: pointer;
+      }
+      .prompt-box .prompt-text.expanded {
+        display: block;
+      }
+      .prompt-box button {
+        padding: 2px 8px;
+        font-size: 11px;
+        background: #475569;
+      }
       .status-msg {
         font-size: 13px;
         color: #475569;
@@ -278,7 +313,7 @@
             .getElementById('singleGrid')
             .insertAdjacentHTML(
               'afterbegin',
-              renderImageCard(data.imageUrl, data.fileName, null, null),
+              renderImageCard(data.imageUrl, data.fileName, null, null, data.prompt),
             );
           updateSingleCardVisibility();
           status.textContent = `Fertig: ${data.fileName} (${data.imageSize}, ${data.aspectRatio})`;
@@ -344,7 +379,7 @@
             }
           </div>
           <div class="grid">
-            ${job.images.map((img) => renderImageCard(img.imageUrl, img.fileName, img.metadata, job.name)).join('')}
+            ${job.images.map((img) => renderImageCard(img.imageUrl, img.fileName, img.metadata, job.name, img.prompt)).join('')}
           </div>
         </div>
       `,
@@ -358,7 +393,9 @@
         try {
           const images = await api('api/images');
           grid.innerHTML = images
-            .map((img) => renderImageCard(img.imageUrl, img.fileName, null, null))
+            .map((img) =>
+              renderImageCard(img.imageUrl, img.fileName, img.metadata, null, img.prompt),
+            )
             .join('');
         } catch (err) {
           document.getElementById('singleStatus').textContent =
@@ -387,7 +424,31 @@
         }
       }
 
-      function renderImageCard(imageUrl, fileName, metadata, jobName) {
+      // Prompt in die Zwischenablage kopieren (Text aus dem DOM, kein Escaping-Problem)
+      async function copyPrompt(btn) {
+        const text = btn.closest('.prompt-box').querySelector('.prompt-text').textContent;
+        try {
+          await navigator.clipboard.writeText(text);
+          btn.textContent = 'Kopiert';
+        } catch {
+          btn.textContent = 'Fehler';
+        }
+        setTimeout(() => (btn.textContent = 'Kopieren'), 1500);
+      }
+
+      function renderPromptBox(prompt) {
+        if (!prompt) return '';
+        return `
+          <div class="prompt-box">
+            <div class="prompt-head">
+              <span>Prompt</span>
+              <button type="button" onclick="copyPrompt(this)">Kopieren</button>
+            </div>
+            <div class="prompt-text" title="Klicken zum Auf-/Zuklappen" onclick="this.classList.toggle('expanded')">${esc(prompt)}</div>
+          </div>`;
+      }
+
+      function renderImageCard(imageUrl, fileName, metadata, jobName, prompt = null) {
         const metaId = `meta_${fileName.replace(/\W/g, '_')}`;
         // Alt-Einträge mit führendem Slash (/images/...) ebenfalls relativ machen
         const src = esc(String(imageUrl).replace(/^\//, ''));
@@ -395,6 +456,7 @@
         <div class="img-card">
           <a href="${src}" target="_blank"><img src="${src}" alt="${esc(fileName)}" /></a>
           <div style="font-size: 11px; color: #64748b; margin-bottom: 6px;">${esc(fileName)}</div>
+          ${renderPromptBox(prompt)}
           <button style="width: 100%; font-size: 13px;" onclick="fetchMetadata('${esc(fileName)}', '${esc(jobName || '')}', '${metaId}')">
             ${metadata ? 'Metadaten neu generieren' : 'Adobe Titel & Keywords erzeugen'}
           </button>
@@ -413,6 +475,12 @@
       `;
       }
 
+      // Modell liefert bei fehlendem Hinweis teils Platzhalter wie "None" oder "N/A"
+      function hasWarning(value) {
+        const text = String(value ?? '').trim();
+        return text !== '' && !/^(none|n\/a|na|null|no|nein|keine?|-+)\.?$/i.test(text);
+      }
+
       function formatMetaHtml(m) {
         const keywords = Array.isArray(m.keywords) ? m.keywords : [];
         return `
@@ -423,7 +491,7 @@
             : ' <span class="warn" style="display:inline;padding:1px 6px;">keine Adobe-Nummer – Metadaten neu generieren</span>'
         }<br/>
         <strong>Keywords (${keywords.length}):</strong> <span style="color:#334155;">${esc(keywords.join(', '))}</span>
-        ${m.complianceWarning ? `<div class="warn">Prüfhinweis: ${esc(m.complianceWarning)}</div>` : ''}
+        ${hasWarning(m.complianceWarning) ? `<div class="warn">Prüfhinweis: ${esc(m.complianceWarning)}</div>` : ''}
       `;
       }
 
