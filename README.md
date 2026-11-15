@@ -8,9 +8,12 @@ Läuft als Express-Backend hinter Nginx unter `https://kodinitools.com/bild-stud
 ```
 server.js                        Express-Backend (API + statische Dateien)
 lib/adobe.js                     Adobe-Stock-Kategorien und CSV-Export
+lib/gallery.js                   Galerie: Bilder mit abgeleiteter Adobe-Kategorie (Ordner)
 test/                            Unit-Tests (node --test)
 deploy.sh                        Update/Deployment auf dem Server
-public/index.html                Frontend (relative Pfade, läuft unter jedem Unterpfad)
+public/index.html                Startseite „Studio“: Prompt, Optionen, Batch-Warteschlange, Auftragsstatus
+public/galerie.html              Galerie: alle Bilder in Ordnern nach Adobe-Kategorie
+public/common.js, style.css      Gemeinsame Hilfsfunktionen und Styles (alle Pfade relativ)
 deploy/bild-studio.nginx.conf    Nginx-Snippet mit Passwortschutz
 .env.example                     Vorlage für .env
 ```
@@ -45,6 +48,8 @@ Auf dem Server installiert `deploy.sh` nur die Laufzeit-Abhängigkeiten (`npm ci
 | GET     | `/api/batch/csv?job=<name>`      | Adobe-Stock-CSV eines Batch-Auftrags                                                  |
 | GET     | `/api/images/:fileName/download` | Bild als Datei herunterladen                                                          |
 | DELETE  | `/api/images/:fileName`          | Bild löschen (Datei + Eintrag im Batch-Job)                                           |
+| GET     | `/api/gallery`                   | Alle Bilder (Sofort + Batch) mit Adobe-Kategorie; nur gespeicherter Stand             |
+| GET     | `/api/gallery/zip?category=<x>`  | Ordner als ZIP inkl. CSV (`all` = Unterordner je Kategorie, `none`, `1`–`21`)         |
 
 ## Einrichtung auf dem Server
 
@@ -65,6 +70,13 @@ sudo cp deploy/bild-studio.nginx.conf /etc/nginx/snippets/bild-studio.conf
 # im server { }-Block von kodinitools.com:  include /etc/nginx/snippets/bild-studio.conf;
 sudo nginx -t && sudo systemctl reload nginx
 ```
+
+## Galerie-Ordner
+
+Die Ordner in der Galerie entstehen automatisch aus der Adobe-Kategorie der Metadaten (gleiche Ableitung wie im
+CSV-Export, auch für alte Namen wie „Nature“). Bilder ohne Metadaten oder ohne zuordenbare Kategorie stehen unter
+„Ohne Kategorie“. Auf der Platte bleiben alle Bilder in `public/images/`; Pfade, `batch_jobs.json` und
+`single_images.json` ändern sich nicht. Echte Unterordner gibt es nur im ZIP von „Alle“.
 
 ## Update
 

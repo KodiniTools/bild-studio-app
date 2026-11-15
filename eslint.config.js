@@ -28,6 +28,19 @@ export default [
     },
   },
 
+  // Gemeinsames Frontend-Script (Browser, klassisches Script, Funktionen global)
+  {
+    files: ['public/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'script',
+      globals: globals.browser,
+    },
+    rules: {
+      'no-unused-vars': ['error', { vars: 'local', argsIgnorePattern: '^_', caughtErrors: 'none' }],
+    },
+  },
+
   // Inline-Script im Frontend (Browser, klassisches Script)
   {
     files: ['**/*.html'],
@@ -35,7 +48,8 @@ export default [
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'script',
-      globals: globals.browser,
+      // esc, api, postJson kommen aus public/common.js
+      globals: { ...globals.browser, esc: 'readonly', api: 'readonly', postJson: 'readonly' },
     },
     rules: {
       // Top-Level-Funktionen werden über onclick="..." im HTML aufgerufen
