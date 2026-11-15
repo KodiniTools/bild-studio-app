@@ -50,7 +50,7 @@ Auf dem Server installiert `deploy.sh` nur die Laufzeit-Abhängigkeiten (`npm ci
 | DELETE  | `/api/images/:fileName`          | Bild löschen (Datei + Eintrag im Batch-Job)                                           |
 | POST    | `/api/images/:fileName/export`   | Bild in ZIP/CSV aufnehmen oder ausschließen (`{ "include": true\|false }`)            |
 | GET     | `/api/gallery`                   | Alle Bilder (Sofort + Batch) mit Adobe-Kategorie; nur gespeicherter Stand             |
-| GET     | `/api/gallery/zip?category=<x>`  | Ordner als ZIP inkl. CSV (`all` = Unterordner je Kategorie, `none`, `1`–`21`)         |
+| GET     | `/api/gallery/zip?category=<x>`  | Ordner als ZIP inkl. CSV (`all`, `none`, `1`–`21`; flach, ohne Unterordner)           |
 
 ## Einrichtung auf dem Server
 
@@ -77,7 +77,7 @@ sudo nginx -t && sudo systemctl reload nginx
 Die Ordner in der Galerie entstehen automatisch aus der Adobe-Kategorie der Metadaten (gleiche Ableitung wie im
 CSV-Export, auch für alte Namen wie „Nature“). Bilder ohne Metadaten oder ohne zuordenbare Kategorie stehen unter
 „Ohne Kategorie“. Auf der Platte bleiben alle Bilder in `public/images/`; Pfade, `batch_jobs.json` und
-`single_images.json` ändern sich nicht. Echte Unterordner gibt es nur im ZIP von „Alle“.
+`single_images.json` ändern sich nicht. Auch die ZIP-Downloads sind flach (Bilder + CSV ohne Unterordner), passend zum Hochladen bei Adobe.
 
 ## Export-Ausschluss
 
