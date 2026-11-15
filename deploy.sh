@@ -47,18 +47,10 @@ NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 (( NODE_MAJOR >= 20 )) || die "Node >= 20 erforderlich (gefunden: $(node -v))."
 
 [[ -f .env ]] || die ".env fehlt. Anlegen mit: cp .env.example .env && chmod 600 .env (GEMINI_API_KEY eintragen)."
-grep -Eq '^GEMINI_API_KEY=.+' .env || die "GEMINI_API_KEY ist in .env nicht gesetzt."
 if [[ "$(stat -c '%a' .env)" != "600" ]]; then
   warn ".env hat Rechte $(stat -c '%a' .env) – setze auf 600."
   chmod 600 .env
 fi
-
-# Port aus .env lesen (muss zum proxy_pass im Nginx-Snippet passen)
-PORT="$(grep -E '^PORT=' .env | tail -n1 | cut -d= -f2- | tr -d '[:space:]"'"'"'' || true)"
-PORT="${PORT:-3018}"
-[[ "$PORT" =~ ^[0-9]+$ ]] || die "PORT in .env ist ungültig: '$PORT'."
-grep -q "127.0.0.1:${PORT}/" deploy/bild-studio.nginx.conf \
-  || warn "PORT=$PORT passt nicht zum proxy_pass in deploy/bild-studio.nginx.conf."
 
 # --- Code aktualisieren ------------------------------------------------------
 if (( DO_PULL )); then
@@ -83,6 +75,34 @@ fi
 # --- Abhängigkeiten + Syntaxcheck -------------------------------------------
 log "Installiere Abhängigkeiten (npm ci --omit=dev)"
 npm ci --omit=dev --no-audit --no-fund
+
+# --- .env prüfen --------------------------------------------------------------
+# Mit dotenv selbst parsen, damit exakt dieselben Regeln gelten wie in server.js
+# (export-Präfix, Leerzeichen um '=', Anführungszeichen, CRLF, BOM).
+# Wie bei dotenv/config hat eine bereits gesetzte Umgebungsvariable Vorrang.
+log "Prüfe .env"
+ENV_INFO="$(node --input-type=module -e '
+  import fs from "node:fs";
+  import dotenv from "dotenv";
+  const e = dotenv.parse(fs.readFileSync(".env"));
+  const key = (process.env.GEMINI_API_KEY ?? e.GEMINI_API_KEY ?? "").trim();
+  const port = (process.env.PORT ?? e.PORT ?? "").trim();
+  console.log(key ? "1" : "0");
+  console.log(port);
+  console.log(Object.keys(e).join(","));
+')" || die ".env konnte nicht gelesen werden."
+{ read -r HAS_KEY; read -r PORT; read -r ENV_KEYS; } <<<"$ENV_INFO"
+
+if [[ "$HAS_KEY" != "1" ]]; then
+  # Nur Variablennamen ausgeben, niemals Werte
+  die "GEMINI_API_KEY ist leer oder fehlt. Gefundene Variablen in .env: ${ENV_KEYS:-(keine)}"
+fi
+
+# Port muss zum proxy_pass im Nginx-Snippet passen
+PORT="${PORT:-3018}"
+[[ "$PORT" =~ ^[0-9]+$ ]] || die "PORT ist ungültig: '$PORT'."
+grep -q "127.0.0.1:${PORT}/" deploy/bild-studio.nginx.conf \
+  || warn "PORT=$PORT passt nicht zum proxy_pass in deploy/bild-studio.nginx.conf."
 
 log "Syntaxcheck"
 npm run --silent check
