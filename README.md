@@ -15,16 +15,29 @@ deploy/bild-studio.nginx.conf    Nginx-Snippet mit Passwortschutz
 
 Laufzeitdaten (`batch_jobs.json`, `public/images/`) und `.env` sind nicht im Repo.
 
+## Entwicklung
+
+```bash
+npm install            # inkl. Dev-Abhängigkeiten (ESLint, Prettier)
+npm run lint           # ESLint für server.js und das Script in public/index.html
+npm run lint:fix       # automatisch behebbare Lint-Fehler korrigieren
+npm run format         # alle Dateien mit Prettier formatieren
+npm run format:check   # nur prüfen (z. B. vor einem Commit)
+```
+
+Konfiguration: `eslint.config.js`, `.prettierrc.json`, `.prettierignore`, `.editorconfig`.
+Auf dem Server installiert `deploy.sh` nur die Laufzeit-Abhängigkeiten (`npm ci --omit=dev`).
+
 ## Endpunkte
 
-| Methode | Pfad                   | Zweck                                         |
-| ------- | ---------------------- | --------------------------------------------- |
-| POST    | `/api/generate-single` | Einzelbild sofort erzeugen                    |
-| POST    | `/api/batch/start`     | Batch-Job absenden (50 % Rabatt)              |
-| GET     | `/api/batch/status`    | Status prüfen, fertige Bilder herunterladen   |
-| POST    | `/api/adobe-metadata`  | Titel, Keywords und Kategorie zu einem Bild   |
-| GET     | `/api/images`          | Einzelbilder (ohne Batch-Zuordnung) auflisten |
-| DELETE  | `/api/images/:fileName`| Bild löschen (Datei + Eintrag im Batch-Job)   |
+| Methode | Pfad                    | Zweck                                         |
+| ------- | ----------------------- | --------------------------------------------- |
+| POST    | `/api/generate-single`  | Einzelbild sofort erzeugen                    |
+| POST    | `/api/batch/start`      | Batch-Job absenden (50 % Rabatt)              |
+| GET     | `/api/batch/status`     | Status prüfen, fertige Bilder herunterladen   |
+| POST    | `/api/adobe-metadata`   | Titel, Keywords und Kategorie zu einem Bild   |
+| GET     | `/api/images`           | Einzelbilder (ohne Batch-Zuordnung) auflisten |
+| DELETE  | `/api/images/:fileName` | Bild löschen (Datei + Eintrag im Batch-Job)   |
 
 ## Einrichtung auf dem Server
 
