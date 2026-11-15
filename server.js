@@ -16,7 +16,6 @@ import {
   UNCATEGORIZED,
   UNCATEGORIZED_LABEL,
   buildGalleryImages,
-  folderDirName,
   folderSlug,
   inFolder,
   parseFolder,
@@ -430,9 +429,8 @@ const findJobFromQuery = (req, res) => {
 
 /**
  * @param extraFiles zusätzliche Dateien im ZIP, z. B. [{ name: 'x.csv', content: '...' }]
- * @param entryName  Pfad im ZIP je Datei (Standard: Dateiname ohne Ordner)
  */
-const sendImagesZip = (res, fileNames, zipName, extraFiles = [], entryName = (name) => name) => {
+const sendImagesZip = (res, fileNames, zipName, extraFiles = []) => {
   const files = [...new Set(fileNames)].filter(
     (name) => isSafeImageName(name) && fs.existsSync(path.join(IMAGES_DIR, name)),
   );
@@ -442,7 +440,7 @@ const sendImagesZip = (res, fileNames, zipName, extraFiles = [], entryName = (na
 
   const zip = new yazl.ZipFile();
   for (const name of files) {
-    zip.addFile(path.join(IMAGES_DIR, name), entryName(name), { compress: false });
+    zip.addFile(path.join(IMAGES_DIR, name), name, { compress: false });
   }
   for (const { name, content } of extraFiles) {
     zip.addBuffer(Buffer.from(content, 'utf-8'), name);
@@ -519,7 +517,7 @@ app.get('/api/gallery', (req, res) => {
 });
 
 // Bilder eines Kategorie-Ordners als ZIP (?category=all|none|1..21), inkl. Adobe-CSV.
-// Bei „all“ liegen die Bilder im ZIP in Unterordnern je Kategorie.
+// Flach (ohne Unterordner): Bilder und CSV direkt im ZIP, wie Adobe sie hochladen will.
 app.get('/api/gallery/zip', (req, res) => {
   try {
     const folder = parseFolder(req.query.category);
@@ -532,7 +530,6 @@ app.get('/api/gallery/zip', (req, res) => {
         isSafeImageName(img.fileName) &&
         fs.existsSync(path.join(IMAGES_DIR, img.fileName)),
     );
-    const dirByFile = new Map(images.map((img) => [img.fileName, folderDirName(img.categoryId)]));
     const slug = folderSlug(folder);
     const csv = buildAdobeCsv({ images });
     sendImagesZip(
@@ -540,7 +537,6 @@ app.get('/api/gallery/zip', (req, res) => {
       images.map((i) => i.fileName),
       `bild-studio_galerie_${slug}_${new Date().toISOString().slice(0, 10)}.zip`,
       csv ? [{ name: `adobe_stock_${slug}.csv`, content: csv }] : [],
-      folder === 'all' ? (name) => `${dirByFile.get(name)}/${name}` : undefined,
     );
   } catch (error) {
     console.error('Fehler beim Galerie-ZIP:', error);

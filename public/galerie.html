@@ -163,7 +163,7 @@
         const excludedText = count > exportable ? `, ${count - exportable} ausgeschlossen` : '';
         zip.textContent =
           folder === 'all'
-            ? `Alle als ZIP (${exportable} Bilder in Ordnern je Kategorie${excludedText})`
+            ? `Alle als ZIP (${exportable} Bilder inkl. CSV${excludedText})`
             : `Ordner als ZIP (${exportable} Bilder inkl. CSV${excludedText})`;
         zip.style.display = loaded && exportable ? '' : 'none';
         return count;
