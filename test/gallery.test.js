@@ -127,3 +127,23 @@ test('buildGalleryImages: Export-Ausschluss (gespeichert und wegen Prüfhinweis)
     ],
   );
 });
+
+test('buildGalleryImages: hochgeladene Bilder behalten Quelle und Originalnamen', () => {
+  const [up, single] = buildGalleryImages({
+    singles: [
+      {
+        fileName: 'Moewe.jpg',
+        imageUrl: 'images/Moewe.jpg',
+        createdAt: 2,
+        source: 'upload',
+        originalName: 'Möwe.jpg',
+      },
+      { fileName: 'single_1.png', imageUrl: 'images/single_1.png', createdAt: 1 },
+    ],
+  });
+  assert.equal(up.source, 'upload');
+  assert.equal(up.originalName, 'Möwe.jpg');
+  assert.equal(up.jobName, null);
+  assert.equal(single.source, 'single');
+  assert.equal(single.originalName, null);
+});

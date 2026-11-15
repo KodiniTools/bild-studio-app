@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, Type, createPartFromUri } from '@google/genai';
 import * as fs from 'fs';
 import * as path from 'path';
 import yazl from 'yazl';
@@ -21,6 +21,7 @@ import {
   parseFolder,
 } from './lib/gallery.js';
 import { createSingleFlight, settlesWithin } from './lib/refresh.js';
+import { MAX_UPLOAD_BYTES, detectImageType, uploadFileName } from './lib/upload.js';
 
 const app = express();
 // Muss zum Nginx-Block passen: proxy_pass http://127.0.0.1:3018/
@@ -74,6 +75,7 @@ const readJobs = () => JSON.parse(fs.readFileSync(JOBS_FILE, 'utf-8'));
 const saveJobs = (jobs) => fs.writeFileSync(JOBS_FILE, JSON.stringify(jobs, null, 2));
 
 // Angaben zu Einzelbildern: { [fileName]: { prompt, model, imageSize, aspectRatio, createdAt, metadata } }
+// Hochgeladene eigene Bilder: { [fileName]: { source: 'upload', originalName, prompt: null, createdAt, metadata } }
 const SINGLES_FILE = './single_images.json';
 const readSingles = () => {
   try {
@@ -84,6 +86,12 @@ const readSingles = () => {
   }
 };
 const saveSingles = (singles) => fs.writeFileSync(SINGLES_FILE, JSON.stringify(singles, null, 2));
+
+// Bilder ab dieser Größe gehen über die Files-API an Gemini statt direkt in der Anfrage
+// (Gemini begrenzt die Größe einer Anfrage mit eingebetteten Daten)
+const INLINE_IMAGE_MAX_BYTES = 15 * 1024 * 1024;
+
+const isUploadedSingle = (info) => info?.source === 'upload';
 
 const findImagePart = (response) =>
   response?.candidates?.[0]?.content?.parts?.find((p) => p.inlineData);
@@ -308,11 +316,13 @@ app.post('/api/adobe-metadata', async (req, res) => {
       return res.status(404).json({ error: 'Bilddatei nicht gefunden.' });
     }
 
-    const imageBase64 = fs.readFileSync(fullPath).toString('base64');
     const mimeType = MIME_BY_EXT[path.extname(safeFileName).toLowerCase()] || 'image/png';
+    // Eigene Bilder (z. B. Fotos) nicht als KI-Bild beschreiben lassen
+    const uploaded = !jobName && isUploadedSingle(readSingles()[safeFileName]);
+    const imageKind = uploaded ? 'image' : 'AI-generated image';
 
     const prompt = `
-      Analyze this AI-generated image for commercial submission to Adobe Stock.
+      Analyze this ${imageKind} for commercial submission to Adobe Stock.
       Rules:
       1. English only.
       2. Title: Descriptive, max 70 characters, no special characters, no "AI generated" buzzwords.
@@ -321,29 +331,44 @@ app.post('/api/adobe-metadata', async (req, res) => {
       5. Category: Exactly one of the official Adobe Stock categories listed in the schema; choose the best match.
     `;
 
-    const response = await client.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: [
-        {
-          role: 'user',
-          parts: [{ inlineData: { mimeType, data: imageBase64 } }, { text: prompt }],
-        },
-      ],
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            title: { type: Type.STRING },
-            keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
-            // Feste Auswahl: nur offizielle Adobe-Kategorien (für die Nummer in der CSV)
-            category: { type: Type.STRING, format: 'enum', enum: [...ADOBE_CATEGORIES] },
-            complianceWarning: { type: Type.STRING },
+    // Große Bilder (z. B. Kamerafotos) über die Files-API, kleine direkt in der Anfrage
+    let imagePart;
+    let remoteFile = null;
+    if (fs.statSync(fullPath).size > INLINE_IMAGE_MAX_BYTES) {
+      remoteFile = await client.files.upload({ file: fullPath, config: { mimeType } });
+      imagePart = createPartFromUri(remoteFile.uri, remoteFile.mimeType || mimeType);
+    } else {
+      imagePart = { inlineData: { mimeType, data: fs.readFileSync(fullPath).toString('base64') } };
+    }
+
+    let response;
+    try {
+      response = await client.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: [{ role: 'user', parts: [imagePart, { text: prompt }] }],
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              title: { type: Type.STRING },
+              keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
+              // Feste Auswahl: nur offizielle Adobe-Kategorien (für die Nummer in der CSV)
+              category: { type: Type.STRING, format: 'enum', enum: [...ADOBE_CATEGORIES] },
+              complianceWarning: { type: Type.STRING },
+            },
+            required: ['title', 'keywords', 'category', 'complianceWarning'],
           },
-          required: ['title', 'keywords', 'category', 'complianceWarning'],
         },
-      },
-    });
+      });
+    } finally {
+      // Hochgeladene Kopie bei Gemini wieder entfernen (sonst nach 48 h automatisch)
+      if (remoteFile?.name) {
+        client.files.delete({ name: remoteFile.name }).catch((error) => {
+          console.error(`Gemini-Datei ${remoteFile.name} nicht gelöscht:`, error.message);
+        });
+      }
+    }
 
     const metadata = JSON.parse(response.text);
     // Nummer für die Adobe-CSV; offizieller Name, falls das Modell abweichend schreibt
@@ -395,6 +420,8 @@ const listSingleImages = () => {
         fileName: d.name,
         imageUrl: `images/${d.name}`,
         createdAt: fs.statSync(path.join(IMAGES_DIR, d.name)).mtimeMs,
+        source: isUploadedSingle(info) ? 'upload' : 'single',
+        originalName: info.originalName ?? null,
         prompt: info.prompt ?? null,
         model: info.model ?? null,
         imageSize: info.imageSize ?? null,
@@ -469,14 +496,14 @@ app.get('/api/images', (req, res) => {
   }
 });
 
-// Alle Einzelbilder als ZIP
+// Alle sofort erstellten Einzelbilder als ZIP (hochgeladene: /api/uploads/zip)
 app.get('/api/images/zip', (req, res) => {
   try {
     const stamp = new Date().toISOString().slice(0, 10);
     sendImagesZip(
       res,
       listSingleImages()
-        .filter((i) => !isExportExcluded(i))
+        .filter((i) => i.source !== 'upload' && !isExportExcluded(i))
         .map((i) => i.fileName),
       `bild-studio_einzelbilder_${stamp}.zip`,
     );
@@ -587,6 +614,95 @@ app.get('/api/batch/csv', (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// 7. Eigene Bilder hochladen (Metadaten danach wie bei erzeugten Bildern)
+// ---------------------------------------------------------------------------
+// Eine Datei pro Anfrage, Inhalt direkt als Body; Originalname in ?name=...
+// Gespeichert wird nur, was an den ersten Bytes als PNG, JPEG oder WebP erkannt wird.
+app.post('/api/uploads', express.raw({ type: () => true, limit: MAX_UPLOAD_BYTES }), (req, res) => {
+  try {
+    const body = req.body;
+    if (!Buffer.isBuffer(body) || body.length === 0) {
+      return res.status(400).json({ error: 'Keine Datei erhalten.' });
+    }
+    const mimeType = detectImageType(body);
+    if (!mimeType) {
+      return res
+        .status(415)
+        .json({ error: 'Nur JPEG-, PNG- und WebP-Bilder können hochgeladen werden.' });
+    }
+    const originalName = typeof req.query.name === 'string' ? req.query.name.slice(0, 255) : '';
+
+    // 'wx' überschreibt nie eine vorhandene Datei, auch bei gleichzeitigen Uploads
+    const isTaken = (name) => fs.existsSync(path.join(IMAGES_DIR, name));
+    let fileName;
+    for (let attempt = 0; !fileName; attempt++) {
+      const candidate = uploadFileName(originalName, mimeType, isTaken);
+      try {
+        fs.writeFileSync(path.join(IMAGES_DIR, candidate), body, { flag: 'wx' });
+        fileName = candidate;
+      } catch (error) {
+        if (error.code !== 'EEXIST' || attempt >= 5) throw error;
+      }
+    }
+
+    const singles = readSingles();
+    singles[fileName] = {
+      source: 'upload',
+      originalName: originalName || null,
+      prompt: null,
+      createdAt: new Date().toISOString(),
+      metadata: null,
+    };
+    saveSingles(singles);
+
+    res.json({ fileName, imageUrl: `images/${fileName}`, originalName: originalName || null });
+  } catch (error) {
+    console.error('Fehler beim Hochladen:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+const UPLOADS_CSV_NAME = 'adobe_stock_hochgeladen.csv';
+const listUploadedImages = () => listSingleImages().filter((i) => i.source === 'upload');
+
+// Hochgeladene Bilder als ZIP inkl. Adobe-CSV (ohne ausgeschlossene)
+app.get('/api/uploads/zip', (req, res) => {
+  try {
+    const images = listUploadedImages().filter((i) => !isExportExcluded(i));
+    const csv = buildAdobeCsv({ images });
+    sendImagesZip(
+      res,
+      images.map((i) => i.fileName),
+      `bild-studio_hochgeladen_${new Date().toISOString().slice(0, 10)}.zip`,
+      csv ? [{ name: UPLOADS_CSV_NAME, content: csv }] : [],
+    );
+  } catch (error) {
+    console.error('Fehler beim ZIP der hochgeladenen Bilder:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Adobe-Stock-CSV der hochgeladenen Bilder
+app.get('/api/uploads/csv', (req, res) => {
+  try {
+    const csv = buildAdobeCsv({ images: listUploadedImages() });
+    if (!csv) {
+      return res.status(404).json({
+        error:
+          'Keine Bilder für die CSV: Bitte für mindestens ein hochgeladenes Bild die ' +
+          'Adobe-Metadaten erzeugen und es in den Adobe-Export aufnehmen.',
+      });
+    }
+    res.attachment(UPLOADS_CSV_NAME);
+    res.type('text/csv; charset=utf-8');
+    res.send(csv);
+  } catch (error) {
+    console.error('Fehler beim CSV-Export:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Liefert die Originaldatei als Download (Content-Disposition: attachment)
 app.get('/api/images/:fileName/download', (req, res) => {
   const { fileName } = req.params;
@@ -686,6 +802,18 @@ app.delete('/api/images/:fileName', (req, res) => {
     console.error('Fehler beim Löschen:', error);
     res.status(500).json({ error: error.message });
   }
+});
+
+// Fehler der Body-Parser (zu große oder kaputte Anfrage) als JSON statt HTML-Seite
+app.use((error, req, res, next) => {
+  if (res.headersSent) return next(error);
+  if (error.type === 'entity.too.large') {
+    const mb = Math.round((error.limit || MAX_UPLOAD_BYTES) / 1024 / 1024);
+    return res.status(413).json({ error: `Datei zu groß (höchstens ${mb} MB).` });
+  }
+  const status = error.status >= 400 && error.status < 500 ? error.status : 500;
+  if (status === 500) console.error('Unerwarteter Fehler:', error);
+  res.status(status).json({ error: status === 500 ? 'Interner Serverfehler.' : error.message });
 });
 
 app.listen(PORT, '127.0.0.1', () => {
