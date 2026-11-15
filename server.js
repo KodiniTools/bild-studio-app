@@ -35,7 +35,12 @@ const TERMINAL_STATES = new Set([
 ]);
 
 const EXT_BY_MIME = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
-const MIME_BY_EXT = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
+const MIME_BY_EXT = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+};
 const extForMime = (mimeType) => EXT_BY_MIME[mimeType] || 'png';
 
 if (!fs.existsSync(IMAGES_DIR)) fs.mkdirSync(IMAGES_DIR, { recursive: true });
@@ -178,19 +183,26 @@ app.get('/api/batch/status', async (req, res) => {
         updated = true;
       }
 
-      if (remoteJob.state === 'JOB_STATE_SUCCEEDED' && remoteJob.dest?.inlinedResponses && job.images.length === 0) {
+      if (
+        remoteJob.state === 'JOB_STATE_SUCCEEDED' &&
+        remoteJob.dest?.inlinedResponses &&
+        job.images.length === 0
+      ) {
         // Inline-Antworten tragen keinen Key -> Dateiname aus Job-ID + Position
         const jobId = job.name.replace(/\W/g, '_');
         remoteJob.dest.inlinedResponses.forEach((item, index) => {
           const part = findImagePart(item.response);
           if (!part) {
-            console.error(`Kein Bild für Anfrage ${index} in ${job.name}:`, item.error ?? 'leere Antwort');
+            console.error(
+              `Kein Bild für Anfrage ${index} in ${job.name}:`,
+              item.error ?? 'leere Antwort',
+            );
             return;
           }
           const fileName = `${jobId}_${index}.${extForMime(part.inlineData.mimeType)}`;
           fs.writeFileSync(
             path.join(IMAGES_DIR, fileName),
-            Buffer.from(part.inlineData.data, 'base64')
+            Buffer.from(part.inlineData.data, 'base64'),
           );
           job.images.push({
             imageUrl: `images/${fileName}`,
@@ -245,10 +257,7 @@ app.post('/api/adobe-metadata', async (req, res) => {
       contents: [
         {
           role: 'user',
-          parts: [
-            { inlineData: { mimeType, data: imageBase64 } },
-            { text: prompt },
-          ],
+          parts: [{ inlineData: { mimeType, data: imageBase64 } }, { text: prompt }],
         },
       ],
       config: {
