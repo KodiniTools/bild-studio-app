@@ -4,188 +4,38 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Gemini Bild-Studio & Adobe Stock Generator</title>
-    <style>
-      body {
-        font-family:
-          system-ui,
-          -apple-system,
-          sans-serif;
-        max-width: 1100px;
-        margin: 20px auto;
-        padding: 0 16px;
-        background: #f8fafc;
-        color: #0f172a;
-      }
-      .card {
-        background: #fff;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        padding: 18px;
-        margin-bottom: 20px;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
-      }
-      .row {
-        display: flex;
-        gap: 8px;
-        margin-bottom: 12px;
-        flex-wrap: wrap;
-      }
-      input[type='text'],
-      select {
-        padding: 9px 12px;
-        border: 1px solid #cbd5e1;
-        border-radius: 6px;
-        font-size: 14px;
-        background: #fff;
-      }
-      input[type='text'] {
-        flex: 1;
-        min-width: 280px;
-      }
-      button {
-        padding: 9px 14px;
-        border: none;
-        border-radius: 6px;
-        background: #2563eb;
-        color: #fff;
-        cursor: pointer;
-        font-weight: 500;
-        font-size: 14px;
-      }
-      button:hover {
-        opacity: 0.92;
-      }
-      button.secondary {
-        background: #475569;
-      }
-      button.success {
-        background: #059669;
-      }
-      button.danger {
-        background: #dc2626;
-      }
-      a.btn-link {
-        display: inline-block;
-        padding: 9px 14px;
-        border-radius: 6px;
-        background: #0f766e;
-        color: #fff;
-        font-weight: 500;
-        font-size: 14px;
-        text-align: center;
-        text-decoration: none;
-      }
-      a.btn-link:hover {
-        opacity: 0.92;
-      }
-      .card-actions {
-        display: flex;
-        gap: 8px;
-        margin-top: 8px;
-      }
-      .card-actions > a,
-      .card-actions > button {
-        flex: 1;
-        font-size: 13px;
-      }
-      button:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-        gap: 16px;
-        margin-top: 12px;
-      }
-      .img-card {
-        border: 1px solid #cbd5e1;
-        border-radius: 6px;
-        padding: 10px;
-        background: #f8fafc;
-      }
-      .img-card img {
-        width: 100%;
-        border-radius: 4px;
-        display: block;
-        margin-bottom: 8px;
-      }
-      .badge {
-        display: inline-block;
-        padding: 2px 8px;
-        border-radius: 999px;
-        font-size: 12px;
-        background: #dbeafe;
-        color: #1e40af;
-        font-weight: 600;
-      }
-      .warn {
-        background: #fef3c7;
-        color: #92400e;
-        padding: 6px;
-        border-radius: 4px;
-        font-size: 12px;
-        margin-top: 6px;
-      }
-      .prompt-box {
-        background: #fff;
-        border: 1px solid #e2e8f0;
-        border-radius: 4px;
-        padding: 6px 8px;
-        margin-bottom: 8px;
-        font-size: 12px;
-        color: #334155;
-      }
-      .prompt-box .prompt-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 2px;
-        color: #64748b;
-        font-weight: 600;
-      }
-      .prompt-box .prompt-text {
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-        display: -webkit-box;
-        -webkit-line-clamp: 4;
-        line-clamp: 4;
-        -webkit-box-orient: vertical;
-        overflow: hidden;
-        cursor: pointer;
-      }
-      .prompt-box .prompt-text.expanded {
-        display: block;
-      }
-      .prompt-box button {
-        padding: 2px 8px;
-        font-size: 11px;
-        background: #475569;
-      }
-      .status-msg {
-        font-size: 13px;
-        color: #475569;
-        margin-top: 6px;
-      }
-    </style>
+    <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <h1>Bild-Studio & Adobe Stock Generator</h1>
+    <header class="topbar">
+      <h1>Bild-Studio & Adobe Stock Generator</h1>
+      <nav class="nav">
+        <a href="./" aria-current="page">Studio</a>
+        <a href="galerie.html">Galerie</a>
+      </nav>
+    </header>
 
     <!-- Eingabe, Auflösung & Modus -->
     <div class="card">
-      <div class="row">
-        <input id="promptInput" type="text" placeholder="Bildbeschreibung (Prompt) eingeben..." />
-        <select id="modelSelect">
+      <label class="prompt-label" for="promptInput">Bildbeschreibung (Prompt)</label>
+      <textarea
+        id="promptInput"
+        rows="10"
+        placeholder="Bildbeschreibung (Prompt) eingeben: Motiv, Umgebung, Licht, Stimmung, Perspektive ..."
+      ></textarea>
+      <div class="hint">Das Feld lässt sich unten rechts weiter aufziehen.</div>
+
+      <div class="row options">
+        <select id="modelSelect" aria-label="Modell">
           <option value="gemini-3-pro-image-preview">Nano Banana Pro (Studio)</option>
           <option value="gemini-nano-banana-2.1">Nano Banana 2.1 (Standard)</option>
         </select>
-        <select id="sizeSelect">
+        <select id="sizeSelect" aria-label="Auflösung">
           <option value="2K" selected>2K (~4–5 MP – Adobe Minimum)</option>
           <option value="4K">4K (~16 MP – Maximum)</option>
           <option value="1K">1K (~1 MP – Nur Entwurf)</option>
         </select>
-        <select id="ratioSelect">
+        <select id="ratioSelect" aria-label="Seitenverhältnis">
           <option value="3:2" selected>3:2 (Querformat)</option>
           <option value="2:3">2:3 (Hochformat)</option>
           <option value="16:9">16:9 (Breitbild)</option>
@@ -214,24 +64,18 @@
       </div>
     </div>
 
-    <!-- Einzelbilder (Sofort-Ergebnisse) -->
-    <div id="singleResultsCard" class="card" style="display: none">
-      <div class="row" style="justify-content: space-between; align-items: center">
-        <h3 style="margin: 0">Sofort erstellte Bilder</h3>
-        <a class="btn-link" href="api/images/zip" download>Alle als ZIP herunterladen</a>
-      </div>
-      <div id="singleGrid" class="grid"></div>
-    </div>
-
-    <!-- Batch-Jobs & Adobe Stock Export -->
+    <!-- Batch-Aufträge (nur Status; die Bilder stehen in der Galerie) -->
     <div class="card">
       <div class="row" style="justify-content: space-between; align-items: center">
-        <h3 style="margin: 0">Batch-Aufträge & Adobe Stock Metadaten</h3>
-        <button class="secondary" onclick="refreshJobs()">Status & Bilder aktualisieren</button>
+        <h3 style="margin: 0">Batch-Aufträge</h3>
+        <button id="refreshJobsBtn" class="secondary" onclick="refreshJobs()">
+          Status & Bilder aktualisieren
+        </button>
       </div>
       <div id="jobsContainer" style="margin-top: 12px"></div>
     </div>
 
+    <script src="common.js"></script>
     <script>
       // Warteschlange im Browser speichern, damit sie Neuladen und Deploys übersteht.
       // localStorage kann fehlen oder blockiert sein (privates Fenster) -> dann nur im Speicher.
@@ -254,46 +98,6 @@
       }
       let queue = loadQueue();
       let allJobs = [];
-
-      // Text sicher in HTML einsetzen (Prompts/Metadaten können <, >, " enthalten)
-      function esc(value) {
-        return String(value ?? '').replace(
-          /[&<>"']/g,
-          (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
-        );
-      }
-
-      // Alle API-Pfade sind RELATIV (ohne führenden Slash), damit die App unter
-      // /bild-studio/ läuft. Liefert geparstes JSON oder wirft einen lesbaren Fehler
-      // (z. B. wenn Nginx bei 401/502/504 eine HTML-Seite statt JSON zurückgibt).
-      async function api(path, options) {
-        const res = await fetch(path, options);
-        const text = await res.text();
-        let data;
-        try {
-          data = JSON.parse(text);
-        } catch {
-          // Anfang der Antwort mit ausgeben: zeigt, wer geantwortet hat (Nginx, Express, ...)
-          const hint = text
-            .replace(/<[^>]*>/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .slice(0, 120);
-          throw new Error(
-            `Server antwortete mit HTTP ${res.status} (kein JSON).` +
-              (hint ? ` Antwort: „${hint}“` : ' Antwort war leer.'),
-          );
-        }
-        if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
-        return data;
-      }
-
-      const postJson = (path, body) =>
-        api(path, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
 
       function addToQueue() {
         const input = document.getElementById('promptInput');
@@ -338,15 +142,12 @@
             imageSize,
             aspectRatio,
           });
-
-          document
-            .getElementById('singleGrid')
-            .insertAdjacentHTML(
-              'afterbegin',
-              renderImageCard(data.imageUrl, data.fileName, null, null, data.prompt),
-            );
-          updateSingleCardVisibility();
-          status.textContent = `Fertig: ${data.fileName} (${data.imageSize}, ${data.aspectRatio})`;
+          // Das Bild erscheint in der Galerie; hier nur Rückmeldung mit Links
+          const src = esc(String(data.imageUrl).replace(/^\//, ''));
+          status.innerHTML =
+            `Fertig: ${esc(data.fileName)} (${esc(data.imageSize)}, ${esc(data.aspectRatio)}) – ` +
+            `<a href="${src}" target="_blank">Bild öffnen</a> · ` +
+            `<a href="galerie.html#ordner=none">in der Galerie (Ohne Kategorie)</a>`;
         } catch (err) {
           status.textContent = 'Fehler: ' + err.message;
         } finally {
@@ -375,13 +176,28 @@
         }
       }
 
-      async function refreshJobs() {
+      // Höchstens eine Statusabfrage gleichzeitig aus dieser Seite (der Server bündelt
+      // zusätzlich alle Abfragen zu einer einzigen bei Gemini)
+      let jobsLoading = null;
+      function refreshJobs() {
+        if (!jobsLoading) {
+          const btn = document.getElementById('refreshJobsBtn');
+          btn.disabled = true;
+          jobsLoading = loadJobs().finally(() => {
+            jobsLoading = null;
+            btn.disabled = false;
+          });
+        }
+        return jobsLoading;
+      }
+
+      async function loadJobs() {
         const container = document.getElementById('jobsContainer');
         try {
           allJobs = await api('api/batch/status');
         } catch (err) {
           // Zuletzt geladene Aufträge stehen lassen: ein einzelner Fehlschlag darf die
-          // bereits angezeigten Bilder nicht von der Seite entfernen
+          // bereits angezeigte Liste nicht leeren
           const errorHtml = `<p style="color:#dc2626;">Fehler beim Laden der Batch-Aufträge: ${esc(err.message)}</p>`;
           container.innerHTML = allJobs.length
             ? `${errorHtml}<p style="color:#64748b;">Angezeigt wird der zuletzt geladene Stand.</p>${renderJobs()}`
@@ -396,186 +212,25 @@
 
       function renderJobs() {
         return allJobs
-          .map(
-            (job) => `
-        <div style="border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; margin-bottom: 14px;">
-          <div class="row" style="justify-content: space-between; align-items: center;">
-            <div>
-              <strong>${esc(job.name)}</strong> <span class="badge">${esc(job.state)}</span>
-              <span style="font-size: 13px; color: #475569;">(${job.count} Bilder | ${esc(job.imageSize || '2K')} | ${esc(job.aspectRatio || '3:2')})</span>
-            </div>
-            ${
-              job.images.length
-                ? `<div class="row" style="margin-bottom: 0">
-                    <a class="btn-link" href="api/batch/zip?job=${encodeURIComponent(job.name)}" download>Alle als ZIP (${job.images.length})</a>
-                    <button class="success" onclick="exportBatchCsv('${esc(job.name)}')">Sammel-CSV für Adobe Stock</button>
-                  </div>`
-                : ''
-            }
+          .map((job) => {
+            const imageCount = (job.images || []).length;
+            return `
+        <div class="job-row">
+          <div>
+            <strong>${esc(job.name)}</strong> <span class="badge">${esc(job.state)}</span>
+            <span style="font-size: 13px; color: #475569;">(${esc(job.count)} Bilder | ${esc(job.imageSize || '2K')} | ${esc(job.aspectRatio || '3:2')})</span>
           </div>
-          <div class="grid">
-            ${job.images.map((img) => renderImageCard(img.imageUrl, img.fileName, img.metadata, job.name, img.prompt)).join('')}
-          </div>
-        </div>
-      `,
-          )
+          ${
+            imageCount
+              ? `<a class="btn-link" href="galerie.html">${imageCount} Bilder in der Galerie</a>`
+              : ''
+          }
+        </div>`;
+          })
           .join('');
       }
 
-      // Einzelbilder vom Server laden (bleiben so auch nach einem Neuladen sichtbar)
-      async function loadSingleImages() {
-        const grid = document.getElementById('singleGrid');
-        try {
-          const images = await api('api/images');
-          grid.innerHTML = images
-            .map((img) =>
-              renderImageCard(img.imageUrl, img.fileName, img.metadata, null, img.prompt),
-            )
-            .join('');
-        } catch (err) {
-          document.getElementById('singleStatus').textContent =
-            'Fehler beim Laden der Einzelbilder: ' + err.message;
-        }
-        updateSingleCardVisibility();
-      }
-
-      function updateSingleCardVisibility() {
-        const hasImages = document.getElementById('singleGrid').children.length > 0;
-        document.getElementById('singleResultsCard').style.display = hasImages ? 'block' : 'none';
-      }
-
-      async function deleteImage(fileName, jobName, btn) {
-        if (!confirm(`Bild "${fileName}" endgültig vom Server löschen?`)) return;
-        btn.disabled = true;
-        try {
-          await api(`api/images/${encodeURIComponent(fileName)}`, { method: 'DELETE' });
-          btn.closest('.img-card').remove();
-          updateSingleCardVisibility();
-          if (jobName) refreshJobs();
-        } catch (err) {
-          btn.disabled = false;
-          document.getElementById('singleStatus').textContent =
-            'Fehler beim Löschen: ' + err.message;
-        }
-      }
-
-      // Prompt in die Zwischenablage kopieren (Text aus dem DOM, kein Escaping-Problem)
-      async function copyPrompt(btn) {
-        const text = btn.closest('.prompt-box').querySelector('.prompt-text').textContent;
-        try {
-          await navigator.clipboard.writeText(text);
-          btn.textContent = 'Kopiert';
-        } catch {
-          btn.textContent = 'Fehler';
-        }
-        setTimeout(() => (btn.textContent = 'Kopieren'), 1500);
-      }
-
-      function renderPromptBox(prompt) {
-        if (!prompt) return '';
-        return `
-          <div class="prompt-box">
-            <div class="prompt-head">
-              <span>Prompt</span>
-              <button type="button" onclick="copyPrompt(this)">Kopieren</button>
-            </div>
-            <div class="prompt-text" title="Klicken zum Auf-/Zuklappen" onclick="this.classList.toggle('expanded')">${esc(prompt)}</div>
-          </div>`;
-      }
-
-      function renderImageCard(imageUrl, fileName, metadata, jobName, prompt = null) {
-        const metaId = `meta_${fileName.replace(/\W/g, '_')}`;
-        // Alt-Einträge mit führendem Slash (/images/...) ebenfalls relativ machen
-        const src = esc(String(imageUrl).replace(/^\//, ''));
-        return `
-        <div class="img-card">
-          <a href="${src}" target="_blank"><img src="${src}" alt="${esc(fileName)}" /></a>
-          <div style="font-size: 11px; color: #64748b; margin-bottom: 6px;">${esc(fileName)}</div>
-          ${renderPromptBox(prompt)}
-          <button style="width: 100%; font-size: 13px;" onclick="fetchMetadata('${esc(fileName)}', '${esc(jobName || '')}', '${metaId}')">
-            ${metadata ? 'Metadaten neu generieren' : 'Adobe Titel & Keywords erzeugen'}
-          </button>
-          <div id="${metaId}" style="margin-top: 8px; font-size: 13px;">
-            ${metadata ? formatMetaHtml(metadata) : ''}
-          </div>
-          <div class="card-actions">
-            <a class="btn-link" href="api/images/${encodeURIComponent(fileName)}/download" download="${esc(fileName)}">
-              Herunterladen
-            </a>
-            <button class="danger" onclick="deleteImage('${esc(fileName)}', '${esc(jobName || '')}', this)">
-              Löschen
-            </button>
-          </div>
-        </div>
-      `;
-      }
-
-      // Modell liefert bei fehlendem Hinweis teils Platzhalter wie "None" oder "N/A"
-      function hasWarning(value) {
-        const text = String(value ?? '').trim();
-        return text !== '' && !/^(none|n\/a|na|null|no|nein|keine?|-+)\.?$/i.test(text);
-      }
-
-      function formatMetaHtml(m) {
-        const keywords = Array.isArray(m.keywords) ? m.keywords : [];
-        return `
-        <strong>Titel:</strong> ${esc(m.title)}<br/>
-        <strong>Kategorie:</strong> ${esc(m.category)}${
-          m.categoryId
-            ? ` <span class="badge">Adobe-Nr. ${esc(m.categoryId)}</span>`
-            : ' <span class="warn" style="display:inline;padding:1px 6px;">keine Adobe-Nummer – Metadaten neu generieren</span>'
-        }<br/>
-        <strong>Keywords (${keywords.length}):</strong> <span style="color:#334155;">${esc(keywords.join(', '))}</span>
-        ${hasWarning(m.complianceWarning) ? `<div class="warn">Prüfhinweis: ${esc(m.complianceWarning)}</div>` : ''}
-      `;
-      }
-
-      async function fetchMetadata(fileName, jobName, metaId) {
-        const box = document.getElementById(metaId);
-        box.innerHTML = '<em>Analysiere Bild mit Gemini Flash...</em>';
-        try {
-          const m = await postJson('api/adobe-metadata', { fileName, jobName: jobName || null });
-          box.innerHTML = formatMetaHtml(m);
-          if (jobName) {
-            // Lokalen Stand mitführen: bleibt sichtbar, falls das Neuladen der Liste scheitert
-            const img = allJobs
-              .find((j) => j.name === jobName)
-              ?.images.find((i) => i.fileName === fileName);
-            if (img) img.metadata = m;
-            refreshJobs();
-          }
-        } catch (err) {
-          box.innerHTML = `<span style="color:#dc2626;">Fehler: ${esc(err.message)}</span>`;
-        }
-      }
-
-      // CSV wird serverseitig erzeugt (identisch zur CSV im Batch-ZIP)
-      async function exportBatchCsv(jobName) {
-        const status = document.getElementById('singleStatus');
-        try {
-          const res = await fetch(`api/batch/csv?job=${encodeURIComponent(jobName)}`);
-          if (!res.ok) {
-            let message = `HTTP ${res.status}`;
-            try {
-              message = (await res.json()).error || message;
-            } catch {
-              // keine JSON-Antwort (z. B. Nginx-Fehlerseite)
-            }
-            throw new Error(message);
-          }
-          const blob = await res.blob();
-          const link = document.createElement('a');
-          link.href = URL.createObjectURL(blob);
-          link.download = `adobe_stock_${jobName.replace(/\W/g, '_')}.csv`;
-          link.click();
-          URL.revokeObjectURL(link.href);
-        } catch (err) {
-          status.textContent = 'CSV-Export: ' + err.message;
-        }
-      }
-
       renderQueue();
-      loadSingleImages();
       refreshJobs();
     </script>
   </body>

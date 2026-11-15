@@ -11,6 +11,15 @@ import {
   categoryName,
   csvFileName,
 } from './lib/adobe.js';
+import {
+  UNCATEGORIZED,
+  UNCATEGORIZED_LABEL,
+  buildGalleryImages,
+  folderDirName,
+  folderSlug,
+  inFolder,
+  parseFolder,
+} from './lib/gallery.js';
 import { createSingleFlight, settlesWithin } from './lib/refresh.js';
 
 const app = express();
@@ -419,8 +428,9 @@ const findJobFromQuery = (req, res) => {
 
 /**
  * @param extraFiles zusätzliche Dateien im ZIP, z. B. [{ name: 'x.csv', content: '...' }]
+ * @param entryName  Pfad im ZIP je Datei (Standard: Dateiname ohne Ordner)
  */
-const sendImagesZip = (res, fileNames, zipName, extraFiles = []) => {
+const sendImagesZip = (res, fileNames, zipName, extraFiles = [], entryName = (name) => name) => {
   const files = [...new Set(fileNames)].filter(
     (name) => isSafeImageName(name) && fs.existsSync(path.join(IMAGES_DIR, name)),
   );
@@ -430,7 +440,7 @@ const sendImagesZip = (res, fileNames, zipName, extraFiles = []) => {
 
   const zip = new yazl.ZipFile();
   for (const name of files) {
-    zip.addFile(path.join(IMAGES_DIR, name), name, { compress: false });
+    zip.addFile(path.join(IMAGES_DIR, name), entryName(name), { compress: false });
   }
   for (const { name, content } of extraFiles) {
     zip.addBuffer(Buffer.from(content, 'utf-8'), name);
@@ -470,6 +480,65 @@ app.get('/api/images/zip', (req, res) => {
     );
   } catch (error) {
     console.error('Fehler beim ZIP-Download:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 6. Galerie: alle Bilder mit Adobe-Kategorie (nur gespeicherter Stand, keine Gemini-Abfrage)
+// ---------------------------------------------------------------------------
+const readGalleryImages = () =>
+  buildGalleryImages({ jobs: readJobs(), singles: listSingleImages() });
+
+app.get('/api/gallery', (req, res) => {
+  try {
+    const jobs = readJobs();
+    res.json({
+      images: buildGalleryImages({ jobs, singles: listSingleImages() }),
+      categories: ADOBE_CATEGORIES.map((name, i) => ({ id: i + 1, name })),
+      uncategorized: { id: UNCATEGORIZED, name: UNCATEGORIZED_LABEL },
+      jobs: jobs.map((j) => ({
+        name: j.name,
+        state: j.state,
+        count: j.count,
+        imageSize: j.imageSize,
+        aspectRatio: j.aspectRatio,
+        createdAt: j.createdAt,
+        imageCount: (j.images || []).length,
+        metadataCount: (j.images || []).filter((i) => i.metadata).length,
+      })),
+    });
+  } catch (error) {
+    console.error('Fehler beim Laden der Galerie:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Bilder eines Kategorie-Ordners als ZIP (?category=all|none|1..21), inkl. Adobe-CSV.
+// Bei „all“ liegen die Bilder im ZIP in Unterordnern je Kategorie.
+app.get('/api/gallery/zip', (req, res) => {
+  try {
+    const folder = parseFolder(req.query.category);
+    if (folder === null) return res.status(400).json({ error: 'Ungültige Kategorie.' });
+
+    const images = readGalleryImages().filter(
+      (img) =>
+        inFolder(img, folder) &&
+        isSafeImageName(img.fileName) &&
+        fs.existsSync(path.join(IMAGES_DIR, img.fileName)),
+    );
+    const dirByFile = new Map(images.map((img) => [img.fileName, folderDirName(img.categoryId)]));
+    const slug = folderSlug(folder);
+    const csv = buildAdobeCsv({ images });
+    sendImagesZip(
+      res,
+      images.map((i) => i.fileName),
+      `bild-studio_galerie_${slug}_${new Date().toISOString().slice(0, 10)}.zip`,
+      csv ? [{ name: `adobe_stock_${slug}.csv`, content: csv }] : [],
+      folder === 'all' ? (name) => `${dirByFile.get(name)}/${name}` : undefined,
+    );
+  } catch (error) {
+    console.error('Fehler beim Galerie-ZIP:', error);
     res.status(500).json({ error: error.message });
   }
 });

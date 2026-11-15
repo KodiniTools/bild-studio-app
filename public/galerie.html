@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Galerie – Bild-Studio</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Bild-Studio & Adobe Stock Generator</h1>
+      <nav class="nav">
+        <a href="./">Studio</a>
+        <a href="galerie.html" aria-current="page">Galerie</a>
+      </nav>
+    </header>
+
+    <!-- Kategorie-Ordner (automatisch aus der Adobe-Kategorie der Metadaten) -->
+    <div class="card">
+      <div class="row" style="justify-content: space-between; align-items: center">
+        <h3 style="margin: 0">Ordner nach Adobe-Kategorie</h3>
+        <button id="batchRefreshBtn" class="secondary" onclick="fetchNewBatchImages()">
+          Neue Batch-Bilder abrufen
+        </button>
+      </div>
+      <div class="hint" style="margin-top: 6px">
+        Bilder ohne Metadaten liegen in „Ohne Kategorie“. Nach „Adobe Titel & Keywords erzeugen“
+        wird das Bild automatisch in den passenden Ordner einsortiert.
+      </div>
+      <div id="folders" class="folders"></div>
+      <div id="galleryStatus" class="status-msg"></div>
+    </div>
+
+    <!-- Inhalt des gewählten Ordners -->
+    <div class="card">
+      <div class="row" style="justify-content: space-between; align-items: center">
+        <h3 id="folderTitle" style="margin: 0">Alle Bilder</h3>
+        <a id="folderZip" class="btn-link" href="api/gallery/zip?category=all" download>
+          Als ZIP herunterladen
+        </a>
+      </div>
+      <div id="grid" class="grid"></div>
+    </div>
+
+    <!-- Downloads wie bisher: Sofort-Bilder bzw. je Batch-Auftrag (inkl. Adobe-CSV) -->
+    <div class="card">
+      <h3 style="margin-top: 0">Downloads nach Auftrag</h3>
+      <div id="exports"></div>
+    </div>
+
+    <script src="common.js"></script>
+    <script>
+      // Stand vom Server: { images, categories, uncategorized, jobs }
+      let gallery = { images: [], categories: [], uncategorized: null, jobs: [] };
+      let loaded = false;
+
+      // Gewählter Ordner steht in der Adresse (#ordner=11 / #ordner=none), bleibt beim
+      // Neuladen erhalten und lässt sich verlinken. Ohne Angabe: alle Bilder.
+      function currentFolder() {
+        const match = location.hash.match(/^#ordner=(none|\d{1,2})$/);
+        if (!match) return 'all';
+        return match[1] === 'none' ? 'none' : Number(match[1]);
+      }
+
+      function inFolder(img, folder) {
+        if (folder === 'all') return true;
+        if (folder === 'none') return img.categoryId === null;
+        return img.categoryId === folder;
+      }
+
+      function folderName(folder) {
+        if (folder === 'all') return 'Alle Bilder';
+        if (folder === 'none') return gallery.uncategorized?.name || 'Ohne Kategorie';
+        const cat = gallery.categories.find((c) => c.id === folder);
+        return cat ? `${cat.name} (Adobe-Nr. ${cat.id})` : `Kategorie ${folder}`;
+      }
+
+      function setStatus(text) {
+        document.getElementById('galleryStatus').textContent = text;
+      }
+
+      async function loadGallery() {
+        try {
+          gallery = await api('api/gallery');
+          loaded = true;
+        } catch (err) {
+          // Bereits angezeigte Bilder stehen lassen
+          setStatus('Fehler beim Laden der Galerie: ' + err.message);
+          if (!loaded) document.getElementById('grid').innerHTML = '';
+          return;
+        }
+        render();
+      }
+
+      function render() {
+        renderFolders();
+        renderGrid();
+        renderExports();
+      }
+
+      function renderFolders() {
+        const folder = currentFolder();
+        const counts = new Map();
+        for (const img of gallery.images) {
+          const key = img.categoryId ?? 'none';
+          counts.set(key, (counts.get(key) || 0) + 1);
+        }
+        // Ein Ordner erscheint, sobald er Bilder enthält (oder gerade gewählt ist)
+        const tiles = [{ key: 'all', label: 'Alle', count: gallery.images.length }];
+        for (const cat of gallery.categories) {
+          if (counts.has(cat.id) || folder === cat.id) {
+            tiles.push({ key: cat.id, label: cat.name, count: counts.get(cat.id) || 0 });
+          }
+        }
+        if (counts.has('none') || folder === 'none') {
+          tiles.push({
+            key: 'none',
+            label: gallery.uncategorized?.name || 'Ohne Kategorie',
+            count: counts.get('none') || 0,
+          });
+        }
+        document.getElementById('folders').innerHTML = tiles
+          .map(
+            (t) => `
+          <button type="button"
+            class="folder${t.key === folder ? ' active' : ''}${t.key === 'none' ? ' uncategorized' : ''}"
+            title="${typeof t.key === 'number' ? `Adobe-Nr. ${t.key}` : ''}"
+            onclick="openFolder('${t.key}')">
+            <span>📁 ${esc(t.label)}</span><span class="count">${t.count}</span>
+          </button>`,
+          )
+          .join('');
+      }
+
+      function openFolder(key) {
+        if (key === 'all') {
+          // Adresse ohne „#“; pushState löst kein hashchange aus -> selbst neu zeichnen
+          history.pushState(null, '', location.pathname + location.search);
+          render();
+        } else {
+          location.hash = `ordner=${key}`; // hashchange zeichnet neu
+        }
+      }
+
+      function updateFolderTitle(count) {
+        document.getElementById('folderTitle').textContent = loaded
+          ? `${folderName(currentFolder())} – ${count} ${count === 1 ? 'Bild' : 'Bilder'}`
+          : 'Galerie';
+      }
+
+      function renderGrid() {
+        const folder = currentFolder();
+        const images = gallery.images.filter((img) => inFolder(img, folder));
+        renderedFolder = folder;
+        updateFolderTitle(images.length);
+        const zip = document.getElementById('folderZip');
+        zip.href = `api/gallery/zip?category=${folder}`;
+        zip.textContent =
+          folder === 'all' ? 'Alle als ZIP (Ordner je Kategorie)' : 'Ordner als ZIP (inkl. CSV)';
+        zip.style.display = loaded && images.length ? '' : 'none';
+        document.getElementById('grid').innerHTML = images.length
+          ? images.map(renderImageCard).join('')
+          : `<p style="color:#64748b;">${loaded ? 'Keine Bilder in diesem Ordner.' : 'Lade Galerie ...'}</p>`;
+      }
+
+      function renderExports() {
+        const singles = gallery.images.filter((i) => i.source === 'single').length;
+        const rows = [];
+        if (singles) {
+          rows.push(`
+          <div class="job-row">
+            <div><strong>Sofort erstellte Bilder</strong>
+              <span style="font-size: 13px; color: #475569;">(${singles} Bilder)</span></div>
+            <a class="btn-link" href="api/images/zip" download>Alle als ZIP herunterladen</a>
+          </div>`);
+        }
+        for (const job of gallery.jobs) {
+          if (!job.imageCount) continue;
+          rows.push(`
+          <div class="job-row" data-job="${esc(job.name)}">
+            <div>
+              <strong>${esc(job.name)}</strong> <span class="badge">${esc(job.state)}</span>
+              <span style="font-size: 13px; color: #475569;">(${job.imageCount} Bilder | ${esc(job.imageSize || '2K')} | ${esc(job.aspectRatio || '3:2')})</span>
+            </div>
+            <div class="row" style="margin-bottom: 0">
+              <a class="btn-link" href="api/batch/zip?job=${encodeURIComponent(job.name)}" download>Alle als ZIP (${job.imageCount})</a>
+              <button class="success" onclick="exportBatchCsv(this.closest('.job-row').dataset.job)"
+                ${job.metadataCount ? '' : 'disabled title="Erst Metadaten für mindestens ein Bild erzeugen"'}>
+                Sammel-CSV für Adobe Stock
+              </button>
+            </div>
+          </div>`);
+        }
+        document.getElementById('exports').innerHTML = rows.length
+          ? rows.join('')
+          : '<p style="color:#64748b;">Noch keine Bilder vorhanden.</p>';
+      }
+
+      // Prompt in die Zwischenablage kopieren (Text aus dem DOM, kein Escaping-Problem)
+      async function copyPrompt(btn) {
+        const text = btn.closest('.prompt-box').querySelector('.prompt-text').textContent;
+        try {
+          await navigator.clipboard.writeText(text);
+          btn.textContent = 'Kopiert';
+        } catch {
+          btn.textContent = 'Fehler';
+        }
+        setTimeout(() => (btn.textContent = 'Kopieren'), 1500);
+      }
+
+      function renderPromptBox(prompt) {
+        if (!prompt) return '';
+        return `
+          <div class="prompt-box">
+            <div class="prompt-head">
+              <span>Prompt</span>
+              <button type="button" onclick="copyPrompt(this)">Kopieren</button>
+            </div>
+            <div class="prompt-text" title="Klicken zum Auf-/Zuklappen" onclick="this.classList.toggle('expanded')">${esc(prompt)}</div>
+          </div>`;
+      }
+
+      function renderImageCard(img) {
+        // Alt-Einträge mit führendem Slash (/images/...) ebenfalls relativ machen
+        const src = esc(String(img.imageUrl).replace(/^\//, ''));
+        const source = img.source === 'batch' ? `Batch: ${esc(img.jobName)}` : 'Sofort erstellt';
+        return `
+        <div class="img-card" data-file="${esc(img.fileName)}">
+          <a href="${src}" target="_blank"><img src="${src}" alt="${esc(img.fileName)}" loading="lazy" decoding="async" /></a>
+          <div style="font-size: 11px; color: #64748b;">${esc(img.fileName)}</div>
+          <div class="img-source">${source}</div>
+          ${renderPromptBox(img.prompt)}
+          <button class="meta-btn" style="width: 100%; font-size: 13px;" onclick="fetchMetadata(this)">
+            ${img.metadata ? 'Metadaten neu generieren' : 'Adobe Titel & Keywords erzeugen'}
+          </button>
+          <div class="meta-box" style="margin-top: 8px; font-size: 13px;">
+            ${img.metadata ? formatMetaHtml(img.metadata, img.categoryId) : ''}
+          </div>
+          <div class="card-actions">
+            <a class="btn-link" href="api/images/${encodeURIComponent(img.fileName)}/download" download="${esc(img.fileName)}">
+              Herunterladen
+            </a>
+            <button class="danger" onclick="deleteImage(this)">Löschen</button>
+          </div>
+        </div>
+      `;
+      }
+
+      // Modell liefert bei fehlendem Hinweis teils Platzhalter wie "None" oder "N/A"
+      function hasWarning(value) {
+        const text = String(value ?? '').trim();
+        return text !== '' && !/^(none|n\/a|na|null|no|nein|keine?|-+)\.?$/i.test(text);
+      }
+
+      // categoryId kommt vom Server (gleiche Ableitung wie in der CSV, inkl. alter Namen)
+      function formatMetaHtml(m, categoryId) {
+        const keywords = Array.isArray(m.keywords) ? m.keywords : [];
+        return `
+        <strong>Titel:</strong> ${esc(m.title)}<br/>
+        <strong>Kategorie:</strong> ${esc(m.category)}${
+          categoryId
+            ? ` <span class="badge">Adobe-Nr. ${esc(categoryId)}</span>`
+            : ' <span class="warn" style="display:inline;padding:1px 6px;">keine Adobe-Nummer – Metadaten neu generieren</span>'
+        }<br/>
+        <strong>Keywords (${keywords.length}):</strong> <span style="color:#334155;">${esc(keywords.join(', '))}</span>
+        ${hasWarning(m.complianceWarning) ? `<div class="warn">Prüfhinweis: ${esc(m.complianceWarning)}</div>` : ''}
+      `;
+      }
+
+      const imageOf = (el) => {
+        const fileName = el.closest('.img-card').dataset.file;
+        return gallery.images.find((i) => i.fileName === fileName);
+      };
+
+      async function fetchMetadata(btn) {
+        const card = btn.closest('.img-card');
+        const img = imageOf(btn);
+        if (!img) return;
+        const box = card.querySelector('.meta-box');
+        btn.disabled = true;
+        box.innerHTML = '<em>Analysiere Bild mit Gemini Flash...</em>';
+        try {
+          const m = await postJson('api/adobe-metadata', {
+            fileName: img.fileName,
+            jobName: img.jobName,
+          });
+          const hadMetadata = Boolean(img.metadata);
+          img.metadata = m;
+          img.categoryId = m.categoryId ?? null;
+          box.innerHTML = formatMetaHtml(m, img.categoryId);
+          btn.textContent = 'Metadaten neu generieren';
+          const job = gallery.jobs.find((j) => j.name === img.jobName);
+          if (job && !hadMetadata) job.metadataCount += 1;
+          // Ordnerzähler und CSV-Knöpfe aktualisieren; die Karte bleibt bis zum nächsten
+          // Ordnerwechsel stehen, damit sie nicht unter dem Mauszeiger verschwindet
+          renderFolders();
+          renderExports();
+          if (!inFolder(img, currentFolder())) {
+            box.insertAdjacentHTML(
+              'beforeend',
+              `<div class="hint" style="margin: 6px 0 0">Einsortiert in Ordner „${esc(folderName(img.categoryId ?? 'none'))}“.</div>`,
+            );
+          }
+        } catch (err) {
+          box.innerHTML = `<span style="color:#dc2626;">Fehler: ${esc(err.message)}</span>`;
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      async function deleteImage(btn) {
+        const img = imageOf(btn);
+        if (!img) return;
+        if (!confirm(`Bild "${img.fileName}" endgültig vom Server löschen?`)) return;
+        btn.disabled = true;
+        try {
+          await api(`api/images/${encodeURIComponent(img.fileName)}`, { method: 'DELETE' });
+          gallery.images = gallery.images.filter((i) => i !== img);
+          const job = gallery.jobs.find((j) => j.name === img.jobName);
+          if (job) {
+            job.imageCount -= 1;
+            if (img.metadata) job.metadataCount -= 1;
+          }
+          btn.closest('.img-card').remove();
+          renderFolders();
+          renderExports();
+          const count = gallery.images.filter((i) => inFolder(i, currentFolder())).length;
+          if (count === 0) renderGrid();
+          else updateFolderTitle(count);
+        } catch (err) {
+          btn.disabled = false;
+          setStatus('Fehler beim Löschen: ' + err.message);
+        }
+      }
+
+      // CSV wird serverseitig erzeugt (identisch zur CSV im Batch-ZIP)
+      async function exportBatchCsv(jobName) {
+        try {
+          const res = await fetch(`api/batch/csv?job=${encodeURIComponent(jobName)}`);
+          if (!res.ok) {
+            let message = `HTTP ${res.status}`;
+            try {
+              message = (await res.json()).error || message;
+            } catch {
+              // keine JSON-Antwort (z. B. Nginx-Fehlerseite)
+            }
+            throw new Error(message);
+          }
+          const blob = await res.blob();
+          const link = document.createElement('a');
+          link.href = URL.createObjectURL(blob);
+          link.download = `adobe_stock_${jobName.replace(/\W/g, '_')}.csv`;
+          link.click();
+          URL.revokeObjectURL(link.href);
+        } catch (err) {
+          setStatus('CSV-Export: ' + err.message);
+        }
+      }
+
+      // Fragt fertige Batch-Aufträge bei Gemini ab (dieselbe Abfrage wie „Status & Bilder
+      // aktualisieren“ auf der Startseite; der Server führt sie nur einmal gleichzeitig aus)
+      let batchRefreshing = false;
+      async function fetchNewBatchImages() {
+        if (batchRefreshing) return;
+        batchRefreshing = true;
+        const btn = document.getElementById('batchRefreshBtn');
+        btn.disabled = true;
+        setStatus('Frage Batch-Aufträge ab ...');
+        try {
+          await api('api/batch/status');
+          setStatus('');
+        } catch (err) {
+          setStatus('Fehler beim Abrufen der Batch-Aufträge: ' + err.message);
+        } finally {
+          batchRefreshing = false;
+          btn.disabled = false;
+        }
+        await loadGallery();
+      }
+
+      // Ordnerwechsel per Klick, Zurück-Taste oder geänderter Adresse
+      let renderedFolder = null;
+      const onFolderChange = () => {
+        if (loaded && currentFolder() !== renderedFolder) render();
+      };
+      window.addEventListener('hashchange', onFolderChange);
+      window.addEventListener('popstate', onFolderChange);
+
+      renderGrid();
+      loadGallery();
+    </script>
+  </body>
+</html>
