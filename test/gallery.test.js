@@ -98,3 +98,32 @@ test('Ordnernamen im ZIP', () => {
   assert.equal(folderSlug('none'), 'ohne_kategorie');
   assert.equal(folderSlug(5), '05_The_Environment');
 });
+
+test('buildGalleryImages: Export-Ausschluss (gespeichert und wegen Prüfhinweis)', () => {
+  const images = buildGalleryImages({
+    singles: [
+      {
+        fileName: 'a.jpg',
+        imageUrl: 'images/a.jpg',
+        createdAt: 3,
+        metadata: { complianceWarning: 'Logo' },
+      },
+      { fileName: 'b.jpg', imageUrl: 'images/b.jpg', createdAt: 2, exportExcluded: true },
+      {
+        fileName: 'c.jpg',
+        imageUrl: 'images/c.jpg',
+        createdAt: 1,
+        metadata: { complianceWarning: 'Logo' },
+        exportExcluded: false,
+      },
+    ],
+  });
+  assert.deepEqual(
+    images.map((i) => [i.fileName, i.exportExcluded, i.excluded]),
+    [
+      ['a.jpg', null, true],
+      ['b.jpg', true, true],
+      ['c.jpg', false, false],
+    ],
+  );
+});

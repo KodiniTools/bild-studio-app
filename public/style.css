@@ -284,3 +284,34 @@ textarea#promptInput {
   margin-bottom: 6px;
   overflow-wrap: anywhere;
 }
+
+/* Galerie: Bildbereich scrollt in sich (Höhe = Fenster minus Kopfzeile/Überschrift) */
+.gallery-scroll {
+  max-height: max(420px, calc(100vh - 150px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin-top: 12px;
+  padding-right: 6px;
+}
+.gallery-scroll .grid {
+  margin-top: 0;
+}
+
+/* Galerie: Bild nicht im Adobe-Export (ZIP/CSV) */
+.export-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.export-note {
+  font-size: 12px;
+  color: #9a3412;
+  margin-top: 2px;
+}
+.img-card.excluded {
+  border-color: #fdba74;
+  background: #fff7ed;
+}

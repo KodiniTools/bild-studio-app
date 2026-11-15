@@ -6,6 +6,8 @@ import {
   categoryIdFor,
   categoryName,
   csvFileName,
+  hasComplianceWarning,
+  isExportExcluded,
 } from '../lib/adobe.js';
 
 test('21 Kategorien mit stabilen Eckwerten', () => {
@@ -75,4 +77,45 @@ test('CSV ohne Metadaten ergibt null', () => {
 
 test('CSV-Dateiname', () => {
   assert.equal(csvFileName('batches/abc-1'), 'adobe_stock_batches_abc_1.csv');
+});
+
+test('Prüfhinweis: Platzhalter zählen nicht', () => {
+  for (const v of [undefined, null, '', '  ', 'None', 'n/a', 'N/A.', 'keine', 'Nein', '-', '---']) {
+    assert.equal(hasComplianceWarning(v), false, String(v));
+  }
+  assert.equal(hasComplianceWarning('Logo on laptop'), true);
+});
+
+test('Export-Ausschluss: eigene Entscheidung vor Prüfhinweis', () => {
+  const warn = { complianceWarning: 'Watermark visible' };
+  const ok = { complianceWarning: 'None' };
+  assert.equal(isExportExcluded({ metadata: warn }), true);
+  assert.equal(isExportExcluded({ metadata: ok }), false);
+  assert.equal(isExportExcluded({ metadata: null }), false);
+  assert.equal(isExportExcluded({ metadata: warn, exportExcluded: false }), false);
+  assert.equal(isExportExcluded({ metadata: ok, exportExcluded: true }), true);
+  assert.equal(isExportExcluded(undefined), false);
+});
+
+test('CSV lässt ausgeschlossene Bilder weg', () => {
+  const meta = (complianceWarning) => ({
+    title: 'T',
+    keywords: ['k'],
+    category: 'Food',
+    complianceWarning,
+  });
+  const job = {
+    images: [
+      { fileName: 'ok.jpg', metadata: meta('None') },
+      { fileName: 'logo.jpg', metadata: meta('Apple logo visible') },
+      { fileName: 'trotzdem.jpg', metadata: meta('Watermark'), exportExcluded: false },
+      { fileName: 'manuell.jpg', metadata: meta(''), exportExcluded: true },
+    ],
+  };
+  const csv = buildAdobeCsv(job);
+  assert.match(csv, /"ok\.jpg"/);
+  assert.match(csv, /"trotzdem\.jpg"/);
+  assert.doesNotMatch(csv, /logo\.jpg|manuell\.jpg/);
+  // Nur ausgeschlossene Bilder -> keine CSV
+  assert.equal(buildAdobeCsv({ images: [job.images[1], job.images[3]] }), null);
 });
