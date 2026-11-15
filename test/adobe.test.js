@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   ADOBE_CATEGORIES,
   buildAdobeCsv,
+  exportFileNames,
   categoryIdFor,
   categoryName,
   csvFileName,
@@ -61,10 +62,10 @@ test('CSV: Spalten, Nummern, Quoting, Bilder ohne Metadaten', () => {
     buildAdobeCsv(job),
     [
       'Filename,Title,Keywords,Category,Releases',
-      '"a.png","Ein ""Titel"", mit Komma","x, y","11",""',
-      '"c.png","Alt","z","8",""',
-      '"d.png","Neu","","3",""',
-      '"e.png","Ohne","","",""',
+      '"Ein_Titel_mit_Komma.png","Ein ""Titel"", mit Komma","x, y","11",""',
+      '"Alt.png","Alt","z","8",""',
+      '"Neu.png","Neu","","3",""',
+      '"Ohne.png","Ohne","","",""',
     ].join('\n'),
   );
 });
@@ -113,9 +114,47 @@ test('CSV lässt ausgeschlossene Bilder weg', () => {
     ],
   };
   const csv = buildAdobeCsv(job);
-  assert.match(csv, /"ok\.jpg"/);
-  assert.match(csv, /"trotzdem\.jpg"/);
-  assert.doesNotMatch(csv, /logo\.jpg|manuell\.jpg/);
+  // Gleicher Titel "T": Nummerierung nur unter den Bildern in der CSV
+  assert.match(csv, /^"T\.jpg",/m);
+  assert.match(csv, /^"T_2\.jpg",/m);
+  assert.equal(csv.split('\n').length, 3);
   // Nur ausgeschlossene Bilder -> keine CSV
   assert.equal(buildAdobeCsv({ images: [job.images[1], job.images[3]] }), null);
+});
+
+test('Export-Dateinamen: nach Titel, Endung bleibt, Duplikate nummeriert', () => {
+  const meta = (title) => ({ title, keywords: ['k'], category: 'Food' });
+  const images = [
+    { fileName: 'batches_abc_6.jpg', metadata: meta('Grandfather and Child Gardening') },
+    { fileName: 'x.PNG', metadata: meta('Möwe am Strand: Sonnenuntergang!') },
+    { fileName: 'y.png', metadata: meta('Möwe am Strand – Sonnenuntergang') },
+    { fileName: 'ohne_meta.jpg', metadata: null },
+    { fileName: 'leer.webp', metadata: meta('  ') },
+    { fileName: 'raus.jpg', metadata: meta('Raus'), exportExcluded: true },
+    { fileName: 'kollision.jpg', metadata: meta('ohne meta') },
+  ];
+  const names = exportFileNames(images);
+  assert.deepEqual(Object.fromEntries(names), {
+    'batches_abc_6.jpg': 'Grandfather_and_Child_Gardening.jpg',
+    'x.PNG': 'Moewe_am_Strand_Sonnenuntergang.png',
+    'y.png': 'Moewe_am_Strand_Sonnenuntergang_2.png',
+    'leer.webp': 'leer.webp',
+    // „ohne_meta.jpg“ behält seinen Namen, daher keine Kollision im ZIP
+    'kollision.jpg': 'ohne_meta_2.jpg',
+  });
+  assert.deepEqual(Object.fromEntries(exportFileNames(undefined)), {});
+});
+
+test('Export-Dateinamen: CSV nutzt dieselben Namen wie das ZIP', () => {
+  const images = [
+    { fileName: 'a.jpg', metadata: { title: 'Gleich', keywords: [] } },
+    { fileName: 'b.jpg', metadata: { title: 'Gleich', keywords: [] } },
+  ];
+  const names = exportFileNames(images);
+  const csvNames = buildAdobeCsv({ images })
+    .split('\n')
+    .slice(1)
+    .map((row) => JSON.parse(row.split(',')[0]));
+  assert.deepEqual(csvNames, [names.get('a.jpg'), names.get('b.jpg')]);
+  assert.deepEqual(csvNames, ['Gleich.jpg', 'Gleich_2.jpg']);
 });
