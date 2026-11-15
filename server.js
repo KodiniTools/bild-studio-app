@@ -298,8 +298,9 @@ app.post('/api/adobe-metadata', async (req, res) => {
 // ---------------------------------------------------------------------------
 // 5. Bilder auflisten & löschen
 // ---------------------------------------------------------------------------
-// Nur einfache Dateinamen ohne Pfadanteile (schützt vor Path Traversal)
-const IMAGE_FILE_RE = /^[\w.-]+\.(png|jpe?g|webp)$/i;
+// Nur einfache Dateinamen ohne Pfadanteile (schützt vor Path Traversal) und ohne
+// führenden Punkt (versteckte Dateien werden weder gelistet noch ausgeliefert)
+const IMAGE_FILE_RE = /^[\w-][\w.-]*\.(png|jpe?g|webp)$/i;
 const isSafeImageName = (name) =>
   typeof name === 'string' && IMAGE_FILE_RE.test(name) && name === path.basename(name);
 
@@ -321,6 +322,31 @@ app.get('/api/images', (req, res) => {
     console.error('Fehler beim Auflisten der Bilder:', error);
     res.status(500).json({ error: error.message });
   }
+});
+
+// Liefert die Originaldatei als Download (Content-Disposition: attachment)
+app.get('/api/images/:fileName/download', (req, res) => {
+  const { fileName } = req.params;
+  if (!isSafeImageName(fileName)) {
+    return res.status(400).json({ error: 'Ungültiger Dateiname.' });
+  }
+  res.download(
+    fileName,
+    fileName,
+    { root: path.resolve(IMAGES_DIR), dotfiles: 'deny' },
+    (error) => {
+      if (!error) return;
+      if (res.headersSent) {
+        console.error('Download abgebrochen:', error.message);
+        return;
+      }
+      if (error.code === 'ENOENT' || (error.status >= 400 && error.status < 500)) {
+        return res.status(404).json({ error: 'Bild nicht gefunden.' });
+      }
+      console.error('Fehler beim Download:', error);
+      res.status(500).json({ error: 'Download fehlgeschlagen.' });
+    },
+  );
 });
 
 // Löscht die Datei und entfernt den Eintrag aus zugehörigen Batch-Jobs

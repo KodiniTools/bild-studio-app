@@ -30,14 +30,15 @@ Auf dem Server installiert `deploy.sh` nur die Laufzeit-Abhängigkeiten (`npm ci
 
 ## Endpunkte
 
-| Methode | Pfad                    | Zweck                                         |
-| ------- | ----------------------- | --------------------------------------------- |
-| POST    | `/api/generate-single`  | Einzelbild sofort erzeugen                    |
-| POST    | `/api/batch/start`      | Batch-Job absenden (50 % Rabatt)              |
-| GET     | `/api/batch/status`     | Status prüfen, fertige Bilder herunterladen   |
-| POST    | `/api/adobe-metadata`   | Titel, Keywords und Kategorie zu einem Bild   |
-| GET     | `/api/images`           | Einzelbilder (ohne Batch-Zuordnung) auflisten |
-| DELETE  | `/api/images/:fileName` | Bild löschen (Datei + Eintrag im Batch-Job)   |
+| Methode | Pfad                             | Zweck                                         |
+| ------- | -------------------------------- | --------------------------------------------- |
+| POST    | `/api/generate-single`           | Einzelbild sofort erzeugen                    |
+| POST    | `/api/batch/start`               | Batch-Job absenden (50 % Rabatt)              |
+| GET     | `/api/batch/status`              | Status prüfen, fertige Bilder herunterladen   |
+| POST    | `/api/adobe-metadata`            | Titel, Keywords und Kategorie zu einem Bild   |
+| GET     | `/api/images`                    | Einzelbilder (ohne Batch-Zuordnung) auflisten |
+| GET     | `/api/images/:fileName/download` | Bild als Datei herunterladen                  |
+| DELETE  | `/api/images/:fileName`          | Bild löschen (Datei + Eintrag im Batch-Job)   |
 
 ## Einrichtung auf dem Server
 

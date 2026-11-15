@@ -64,6 +64,30 @@
       button.danger {
         background: #dc2626;
       }
+      a.btn-link {
+        display: inline-block;
+        padding: 9px 14px;
+        border-radius: 6px;
+        background: #0f766e;
+        color: #fff;
+        font-weight: 500;
+        font-size: 14px;
+        text-align: center;
+        text-decoration: none;
+      }
+      a.btn-link:hover {
+        opacity: 0.92;
+      }
+      .card-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .card-actions > a,
+      .card-actions > button {
+        flex: 1;
+        font-size: 13px;
+      }
       button:disabled {
         opacity: 0.5;
         cursor: not-allowed;
@@ -367,9 +391,14 @@
           <div id="${metaId}" style="margin-top: 8px; font-size: 13px;">
             ${metadata ? formatMetaHtml(metadata) : ''}
           </div>
-          <button class="danger" style="width: 100%; font-size: 13px; margin-top: 8px;" onclick="deleteImage('${esc(fileName)}', '${esc(jobName || '')}', this)">
-            Bild löschen
-          </button>
+          <div class="card-actions">
+            <a class="btn-link" href="api/images/${encodeURIComponent(fileName)}/download" download="${esc(fileName)}">
+              Herunterladen
+            </a>
+            <button class="danger" onclick="deleteImage('${esc(fileName)}', '${esc(jobName || '')}', this)">
+              Löschen
+            </button>
+          </div>
         </div>
       `;
       }
