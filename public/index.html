@@ -233,7 +233,26 @@
     </div>
 
     <script>
-      let queue = [];
+      // Warteschlange im Browser speichern, damit sie Neuladen und Deploys übersteht.
+      // localStorage kann fehlen oder blockiert sein (privates Fenster) -> dann nur im Speicher.
+      const QUEUE_KEY = 'bild-studio.queue';
+      function loadQueue() {
+        try {
+          const saved = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
+          return Array.isArray(saved) ? saved.filter((p) => typeof p === 'string' && p.trim()) : [];
+        } catch {
+          return [];
+        }
+      }
+      function saveQueue() {
+        try {
+          if (queue.length) localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+          else localStorage.removeItem(QUEUE_KEY);
+        } catch {
+          // Speichern nicht möglich: Warteschlange bleibt bis zum Neuladen erhalten
+        }
+      }
+      let queue = loadQueue();
       let allJobs = [];
 
       // Text sicher in HTML einsetzen (Prompts/Metadaten können <, >, " enthalten)
@@ -286,6 +305,7 @@
           )
           .join('');
         btn.textContent = `Batch absenden (${queue.length} Bilder – 50% Rabatt)`;
+        saveQueue();
       }
 
       async function generateSingle() {
@@ -532,6 +552,7 @@
         }
       }
 
+      renderQueue();
       loadSingleImages();
       refreshJobs();
     </script>

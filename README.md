@@ -86,6 +86,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://kodinitools.com/bild-studio/   
 
 ## Hinweise
 
+- Die Batch-Warteschlange (noch nicht abgesendete Prompts) wird im Browser gespeichert (`localStorage`) und übersteht so Neuladen und Deploys. Sie gilt nur für den jeweiligen Browser bzw. das Gerät.
 - Prompts werden gespeichert und auf jeder Bildkarte angezeigt: bei Einzelbildern in `single_images.json` (dort auch die Adobe-Metadaten), bei Batch-Aufträgen im Job (`prompts`, Zuordnung per Position). Bilder, die vor dieser Funktion erzeugt wurden, haben keinen gespeicherten Prompt.
 - Adobe-Stock-Kategorien (Nummern 1–21) stehen in `lib/adobe.js`. Die CSV enthält die Spalten `Filename,Title,Keywords,Category,Releases`; `Category` ist die Nummer, `Releases` bleibt leer. Ältere Metadaten ohne zuordenbare Kategorie haben eine leere Nummer und sollten neu generiert werden.
 - Bilder werden unverändert so gespeichert, wie die Gemini-API sie liefert. Einzel- und ZIP-Downloads enthalten immer die Originaldateien (volle Auflösung, keine Neukomprimierung).
