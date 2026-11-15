@@ -7,6 +7,8 @@ Läuft als Express-Backend hinter Nginx unter `https://kodinitools.com/bild-stud
 
 ```
 server.js                        Express-Backend (API + statische Dateien)
+lib/adobe.js                     Adobe-Stock-Kategorien und CSV-Export
+test/                            Unit-Tests (node --test)
 deploy.sh                        Update/Deployment auf dem Server
 public/index.html                Frontend (relative Pfade, läuft unter jedem Unterpfad)
 deploy/bild-studio.nginx.conf    Nginx-Snippet mit Passwortschutz
@@ -23,6 +25,7 @@ npm run lint           # ESLint für server.js und das Script in public/index.ht
 npm run lint:fix       # automatisch behebbare Lint-Fehler korrigieren
 npm run format         # alle Dateien mit Prettier formatieren
 npm run format:check   # nur prüfen (z. B. vor einem Commit)
+npm test               # Unit-Tests (node --test, z. B. Adobe-Kategorien und CSV)
 ```
 
 Konfiguration: `eslint.config.js`, `.prettierrc.json`, `.prettierignore`, `.editorconfig`.
@@ -83,6 +86,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://kodinitools.com/bild-studio/   
 
 ## Hinweise
 
+- Adobe-Stock-Kategorien (Nummern 1–21) stehen in `lib/adobe.js`. Die CSV enthält die Spalten `Filename,Title,Keywords,Category,Releases`; `Category` ist die Nummer, `Releases` bleibt leer. Ältere Metadaten ohne zuordenbare Kategorie haben eine leere Nummer und sollten neu generiert werden.
 - Bilder werden unverändert so gespeichert, wie die Gemini-API sie liefert. Einzel- und ZIP-Downloads enthalten immer die Originaldateien (volle Auflösung, keine Neukomprimierung).
 - Der Server lauscht nur auf `127.0.0.1`; Zugriff von aussen ausschliesslich über Nginx mit Basic Auth.
 - Jeder Aufruf von `generate-single`, `batch/start` und `adobe-metadata` verursacht API-Kosten.

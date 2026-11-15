@@ -417,7 +417,11 @@
         const keywords = Array.isArray(m.keywords) ? m.keywords : [];
         return `
         <strong>Titel:</strong> ${esc(m.title)}<br/>
-        <strong>Kategorie:</strong> ${esc(m.category)}<br/>
+        <strong>Kategorie:</strong> ${esc(m.category)}${
+          m.categoryId
+            ? ` <span class="badge">Adobe-Nr. ${esc(m.categoryId)}</span>`
+            : ' <span class="warn" style="display:inline;padding:1px 6px;">keine Adobe-Nummer – Metadaten neu generieren</span>'
+        }<br/>
         <strong>Keywords (${keywords.length}):</strong> <span style="color:#334155;">${esc(keywords.join(', '))}</span>
         ${m.complianceWarning ? `<div class="warn">Prüfhinweis: ${esc(m.complianceWarning)}</div>` : ''}
       `;
