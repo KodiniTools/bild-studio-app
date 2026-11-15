@@ -324,7 +324,42 @@ const listSingleImages = () => {
  * (Originalgröße, ohne Neukomprimierung) und unkomprimiert abgelegt: PNG/JPEG/WebP
  * sind bereits komprimiert, so bleibt der Download schnell.
  */
-const sendImagesZip = (res, fileNames, zipName) => {
+/**
+ * Adobe-Stock-CSV eines Batch-Jobs (nur Bilder mit Metadaten).
+ * Format unverändert zum bisherigen Browser-Export: Filename,Title,Keywords.
+ * @returns {string|null} CSV-Text oder null, wenn kein Bild Metadaten hat
+ */
+const buildAdobeCsv = (job) => {
+  const quote = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+  const rows = ['Filename,Title,Keywords'];
+  for (const img of job.images || []) {
+    if (!img.metadata) continue;
+    const keywords = Array.isArray(img.metadata.keywords) ? img.metadata.keywords : [];
+    rows.push([img.fileName, img.metadata.title, keywords.join(', ')].map(quote).join(','));
+  }
+  return rows.length > 1 ? rows.join('\n') : null;
+};
+const csvFileName = (jobName) => `adobe_stock_${jobName.replace(/\W/g, '_')}.csv`;
+
+// Batch-Job aus ?job=... laden; sendet bei Fehler selbst die Antwort und liefert null
+const findJobFromQuery = (req, res) => {
+  const jobName = req.query.job;
+  if (typeof jobName !== 'string' || !jobName) {
+    res.status(400).json({ error: 'Parameter job fehlt.' });
+    return null;
+  }
+  const job = readJobs().find((j) => j.name === jobName);
+  if (!job) {
+    res.status(404).json({ error: 'Batch-Auftrag nicht gefunden.' });
+    return null;
+  }
+  return job;
+};
+
+/**
+ * @param extraFiles zusätzliche Dateien im ZIP, z. B. [{ name: 'x.csv', content: '...' }]
+ */
+const sendImagesZip = (res, fileNames, zipName, extraFiles = []) => {
   const files = [...new Set(fileNames)].filter(
     (name) => isSafeImageName(name) && fs.existsSync(path.join(IMAGES_DIR, name)),
   );
@@ -335,6 +370,9 @@ const sendImagesZip = (res, fileNames, zipName) => {
   const zip = new yazl.ZipFile();
   for (const name of files) {
     zip.addFile(path.join(IMAGES_DIR, name), name, { compress: false });
+  }
+  for (const { name, content } of extraFiles) {
+    zip.addBuffer(Buffer.from(content, 'utf-8'), name);
   }
   zip.end();
 
@@ -376,22 +414,42 @@ app.get('/api/images/zip', (req, res) => {
 });
 
 // Alle Bilder eines Batch-Jobs als ZIP (?job=batches/...)
+// Enthält zusätzlich die Adobe-Stock-CSV, sobald mindestens ein Bild Metadaten hat
 app.get('/api/batch/zip', (req, res) => {
   try {
-    const jobName = req.query.job;
-    if (typeof jobName !== 'string' || !jobName) {
-      return res.status(400).json({ error: 'Parameter job fehlt.' });
-    }
-    const job = readJobs().find((j) => j.name === jobName);
-    if (!job) return res.status(404).json({ error: 'Batch-Auftrag nicht gefunden.' });
+    const job = findJobFromQuery(req, res);
+    if (!job) return;
 
+    const csv = buildAdobeCsv(job);
     sendImagesZip(
       res,
       (job.images || []).map((i) => i.fileName),
-      `bild-studio_${jobName.replace(/\W/g, '_')}.zip`,
+      `bild-studio_${job.name.replace(/\W/g, '_')}.zip`,
+      csv ? [{ name: csvFileName(job.name), content: csv }] : [],
     );
   } catch (error) {
     console.error('Fehler beim ZIP-Download:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Adobe-Stock-CSV eines Batch-Auftrags (?job=batches/...)
+app.get('/api/batch/csv', (req, res) => {
+  try {
+    const job = findJobFromQuery(req, res);
+    if (!job) return;
+
+    const csv = buildAdobeCsv(job);
+    if (!csv) {
+      return res.status(404).json({
+        error: 'Bitte zuerst für mindestens ein Bild in diesem Batch die Adobe-Metadaten erzeugen.',
+      });
+    }
+    res.attachment(csvFileName(job.name));
+    res.type('text/csv; charset=utf-8');
+    res.send(csv);
+  } catch (error) {
+    console.error('Fehler beim CSV-Export:', error);
     res.status(500).json({ error: error.message });
   }
 });
