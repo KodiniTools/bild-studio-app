@@ -4,6 +4,13 @@ import { GoogleGenAI, Type } from '@google/genai';
 import * as fs from 'fs';
 import * as path from 'path';
 import yazl from 'yazl';
+import {
+  ADOBE_CATEGORIES,
+  buildAdobeCsv,
+  categoryIdFor,
+  categoryName,
+  csvFileName,
+} from './lib/adobe.js';
 
 const app = express();
 // Muss zum Nginx-Block passen: proxy_pass http://127.0.0.1:3018/
@@ -250,7 +257,7 @@ app.post('/api/adobe-metadata', async (req, res) => {
       2. Title: Descriptive, max 70 characters, no special characters, no "AI generated" buzzwords.
       3. Keywords: Exactly 25 keywords ordered strictly by relevance (most important first).
       4. Strict Compliance: NEVER include brand names, trademarks, artist names, or celebrity names.
-      5. Category: Best matching Adobe Stock category (e.g., Landscapes, Business, Technology, Abstract, Food, Lifestyle, Architecture).
+      5. Category: Exactly one of the official Adobe Stock categories listed in the schema; choose the best match.
     `;
 
     const response = await client.models.generateContent({
@@ -268,7 +275,8 @@ app.post('/api/adobe-metadata', async (req, res) => {
           properties: {
             title: { type: Type.STRING },
             keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
-            category: { type: Type.STRING },
+            // Feste Auswahl: nur offizielle Adobe-Kategorien (für die Nummer in der CSV)
+            category: { type: Type.STRING, format: 'enum', enum: [...ADOBE_CATEGORIES] },
             complianceWarning: { type: Type.STRING },
           },
           required: ['title', 'keywords', 'category', 'complianceWarning'],
@@ -277,6 +285,9 @@ app.post('/api/adobe-metadata', async (req, res) => {
     });
 
     const metadata = JSON.parse(response.text);
+    // Nummer für die Adobe-CSV; offizieller Name, falls das Modell abweichend schreibt
+    metadata.categoryId = categoryIdFor(metadata.category);
+    if (metadata.categoryId) metadata.category = categoryName(metadata.categoryId);
 
     // Metadaten dauerhaft im Batch-Job speichern, falls zugehörig
     if (jobName) {
@@ -324,22 +335,6 @@ const listSingleImages = () => {
  * (Originalgröße, ohne Neukomprimierung) und unkomprimiert abgelegt: PNG/JPEG/WebP
  * sind bereits komprimiert, so bleibt der Download schnell.
  */
-/**
- * Adobe-Stock-CSV eines Batch-Jobs (nur Bilder mit Metadaten).
- * Format unverändert zum bisherigen Browser-Export: Filename,Title,Keywords.
- * @returns {string|null} CSV-Text oder null, wenn kein Bild Metadaten hat
- */
-const buildAdobeCsv = (job) => {
-  const quote = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
-  const rows = ['Filename,Title,Keywords'];
-  for (const img of job.images || []) {
-    if (!img.metadata) continue;
-    const keywords = Array.isArray(img.metadata.keywords) ? img.metadata.keywords : [];
-    rows.push([img.fileName, img.metadata.title, keywords.join(', ')].map(quote).join(','));
-  }
-  return rows.length > 1 ? rows.join('\n') : null;
-};
-const csvFileName = (jobName) => `adobe_stock_${jobName.replace(/\W/g, '_')}.csv`;
 
 // Batch-Job aus ?job=... laden; sendet bei Fehler selbst die Antwort und liefert null
 const findJobFromQuery = (req, res) => {
