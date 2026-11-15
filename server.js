@@ -57,6 +57,18 @@ if (!fs.existsSync(JOBS_FILE)) fs.writeFileSync(JOBS_FILE, JSON.stringify([], nu
 const readJobs = () => JSON.parse(fs.readFileSync(JOBS_FILE, 'utf-8'));
 const saveJobs = (jobs) => fs.writeFileSync(JOBS_FILE, JSON.stringify(jobs, null, 2));
 
+// Angaben zu Einzelbildern: { [fileName]: { prompt, model, imageSize, aspectRatio, createdAt, metadata } }
+const SINGLES_FILE = './single_images.json';
+const readSingles = () => {
+  try {
+    return JSON.parse(fs.readFileSync(SINGLES_FILE, 'utf-8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return {};
+    throw error;
+  }
+};
+const saveSingles = (singles) => fs.writeFileSync(SINGLES_FILE, JSON.stringify(singles, null, 2));
+
 const findImagePart = (response) =>
   response?.candidates?.[0]?.content?.parts?.find((p) => p.inlineData);
 
@@ -93,7 +105,19 @@ app.post('/api/generate-single', async (req, res) => {
     const fileName = `single_${Date.now()}.${extForMime(part.inlineData.mimeType)}`;
     fs.writeFileSync(path.join(IMAGES_DIR, fileName), Buffer.from(part.inlineData.data, 'base64'));
 
+    const singles = readSingles();
+    singles[fileName] = {
+      prompt,
+      model,
+      imageSize,
+      aspectRatio,
+      createdAt: new Date().toISOString(),
+      metadata: null,
+    };
+    saveSingles(singles);
+
     res.json({
+      prompt,
       // Relativ (ohne führenden Slash), damit die App unter /bild-studio/ funktioniert
       imageUrl: `images/${fileName}`,
       fileName,
@@ -153,6 +177,8 @@ app.post('/api/batch/start', async (req, res) => {
       imageSize,
       aspectRatio,
       count: cleanPrompts.length,
+      // Reihenfolge entspricht den Inline-Antworten -> Zuordnung Bild <-> Prompt per Index
+      prompts: cleanPrompts,
       state: batchJob.state || 'JOB_STATE_PENDING',
       createdAt: new Date().toISOString(),
       images: [],
@@ -215,6 +241,7 @@ app.get('/api/batch/status', async (req, res) => {
           job.images.push({
             imageUrl: `images/${fileName}`,
             fileName,
+            prompt: job.prompts?.[index] ?? null,
             metadata: null,
           });
         });
@@ -289,7 +316,7 @@ app.post('/api/adobe-metadata', async (req, res) => {
     metadata.categoryId = categoryIdFor(metadata.category);
     if (metadata.categoryId) metadata.category = categoryName(metadata.categoryId);
 
-    // Metadaten dauerhaft im Batch-Job speichern, falls zugehörig
+    // Metadaten dauerhaft speichern: im Batch-Job bzw. bei den Einzelbildern
     if (jobName) {
       const jobs = readJobs();
       const job = jobs.find((j) => j.name === jobName);
@@ -298,6 +325,11 @@ app.post('/api/adobe-metadata', async (req, res) => {
         img.metadata = metadata;
         saveJobs(jobs);
       }
+    } else {
+      const singles = readSingles();
+      // Auch ältere Einzelbilder ohne Eintrag bekommen einen (ohne Prompt)
+      singles[safeFileName] = { ...(singles[safeFileName] || { prompt: null }), metadata };
+      saveSingles(singles);
     }
 
     res.json(metadata);
@@ -319,14 +351,23 @@ const isSafeImageName = (name) =>
 // Einzelbilder = alle Bilddateien, die zu keinem Batch-Job gehören (neueste zuerst)
 const listSingleImages = () => {
   const jobFiles = new Set(readJobs().flatMap((j) => (j.images || []).map((i) => i.fileName)));
+  const singles = readSingles();
   return fs
     .readdirSync(IMAGES_DIR, { withFileTypes: true })
     .filter((d) => d.isFile() && isSafeImageName(d.name) && !jobFiles.has(d.name))
-    .map((d) => ({
-      fileName: d.name,
-      imageUrl: `images/${d.name}`,
-      createdAt: fs.statSync(path.join(IMAGES_DIR, d.name)).mtimeMs,
-    }))
+    .map((d) => {
+      const info = singles[d.name] || {};
+      return {
+        fileName: d.name,
+        imageUrl: `images/${d.name}`,
+        createdAt: fs.statSync(path.join(IMAGES_DIR, d.name)).mtimeMs,
+        prompt: info.prompt ?? null,
+        model: info.model ?? null,
+        imageSize: info.imageSize ?? null,
+        aspectRatio: info.aspectRatio ?? null,
+        metadata: info.metadata ?? null,
+      };
+    })
     .sort((a, b) => b.createdAt - a.createdAt);
 };
 
@@ -490,6 +531,10 @@ app.delete('/api/images/:fileName', (req, res) => {
       if (job.images.length !== before) jobsChanged = true;
     }
 
+    const singles = readSingles();
+    const singlesChanged = fileName in singles;
+    if (singlesChanged) delete singles[fileName];
+
     let fileExisted = true;
     try {
       fs.unlinkSync(path.join(IMAGES_DIR, fileName));
@@ -499,7 +544,8 @@ app.delete('/api/images/:fileName', (req, res) => {
     }
 
     if (jobsChanged) saveJobs(jobs);
-    if (!fileExisted && !jobsChanged) {
+    if (singlesChanged) saveSingles(singles);
+    if (!fileExisted && !jobsChanged && !singlesChanged) {
       return res.status(404).json({ error: 'Bild nicht gefunden.' });
     }
     res.json({ deleted: fileName });

@@ -15,7 +15,7 @@ deploy/bild-studio.nginx.conf    Nginx-Snippet mit Passwortschutz
 .env.example                     Vorlage für .env
 ```
 
-Laufzeitdaten (`batch_jobs.json`, `public/images/`) und `.env` sind nicht im Repo.
+Laufzeitdaten (`batch_jobs.json`, `single_images.json`, `public/images/`) und `.env` sind nicht im Repo.
 
 ## Entwicklung
 
@@ -86,6 +86,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://kodinitools.com/bild-studio/   
 
 ## Hinweise
 
+- Prompts werden gespeichert und auf jeder Bildkarte angezeigt: bei Einzelbildern in `single_images.json` (dort auch die Adobe-Metadaten), bei Batch-Aufträgen im Job (`prompts`, Zuordnung per Position). Bilder, die vor dieser Funktion erzeugt wurden, haben keinen gespeicherten Prompt.
 - Adobe-Stock-Kategorien (Nummern 1–21) stehen in `lib/adobe.js`. Die CSV enthält die Spalten `Filename,Title,Keywords,Category,Releases`; `Category` ist die Nummer, `Releases` bleibt leer. Ältere Metadaten ohne zuordenbare Kategorie haben eine leere Nummer und sollten neu generiert werden.
 - Bilder werden unverändert so gespeichert, wie die Gemini-API sie liefert. Einzel- und ZIP-Downloads enthalten immer die Originaldateien (volle Auflösung, keine Neukomprimierung).
 - Der Server lauscht nur auf `127.0.0.1`; Zugriff von aussen ausschliesslich über Nginx mit Basic Auth.
