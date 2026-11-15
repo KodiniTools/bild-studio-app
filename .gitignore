@@ -1,0 +1,6 @@
+node_modules/
+.env
+# Laufzeitdaten (werden vom Server erzeugt)
+batch_jobs.json
+public/images/
+*.log

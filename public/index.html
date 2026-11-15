@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gemini Bild-Studio & Adobe Stock Generator</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 1100px; margin: 20px auto; padding: 0 16px; background: #f8fafc; color: #0f172a; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 18px; margin-bottom: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+    .row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+    input[type="text"], select { padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px; background: #fff; }
+    input[type="text"] { flex: 1; min-width: 280px; }
+    button { padding: 9px 14px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; font-weight: 500; font-size: 14px; }
+    button:hover { opacity: 0.92; }
+    button.secondary { background: #475569; }
+    button.success { background: #059669; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-top: 12px; }
+    .img-card { border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px; background: #f8fafc; }
+    .img-card img { width: 100%; border-radius: 4px; display: block; margin-bottom: 8px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; background: #dbeafe; color: #1e40af; font-weight: 600; }
+    .warn { background: #fef3c7; color: #92400e; padding: 6px; border-radius: 4px; font-size: 12px; margin-top: 6px; }
+    .status-msg { font-size: 13px; color: #475569; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <h1>Bild-Studio & Adobe Stock Generator</h1>
+
+  <!-- Eingabe, Auflösung & Modus -->
+  <div class="card">
+    <div class="row">
+      <input id="promptInput" type="text" placeholder="Bildbeschreibung (Prompt) eingeben..." />
+      <select id="modelSelect">
+        <option value="gemini-3-pro-image-preview">Nano Banana Pro (Studio)</option>
+        <option value="gemini-nano-banana-2.1">Nano Banana 2.1 (Standard)</option>
+      </select>
+      <select id="sizeSelect">
+        <option value="2K" selected>2K (~4–5 MP – Adobe Minimum)</option>
+        <option value="4K">4K (~16 MP – Maximum)</option>
+        <option value="1K">1K (~1 MP – Nur Entwurf)</option>
+      </select>
+      <select id="ratioSelect">
+        <option value="3:2" selected>3:2 (Querformat)</option>
+        <option value="2:3">2:3 (Hochformat)</option>
+        <option value="16:9">16:9 (Breitbild)</option>
+        <option value="9:16">9:16 (Vertikal)</option>
+        <option value="1:1">1:1 (Quadrat)</option>
+        <option value="4:3">4:3 (Klassisch)</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <button id="singleBtn" onclick="generateSingle()">Sofort erstellen</button>
+      <button class="secondary" onclick="addToQueue()">+ In Batch-Warteschlange (50% Rabatt)</button>
+    </div>
+    <div id="singleStatus" class="status-msg"></div>
+
+    <!-- Warteschlange -->
+    <div id="queueSection" style="display: none; border-top: 1px solid #e2e8f0; padding-top: 12px; margin-top: 12px;">
+      <strong>Aktuelle Warteschlange:</strong>
+      <ul id="queueList" style="margin: 8px 0;"></ul>
+      <button id="submitBatchBtn" class="success" onclick="submitBatch()">Batch absenden</button>
+    </div>
+  </div>
+
+  <!-- Einzelbilder (Sofort-Ergebnisse) -->
+  <div id="singleResultsCard" class="card" style="display: none;">
+    <h3>Sofort erstellte Bilder</h3>
+    <div id="singleGrid" class="grid"></div>
+  </div>
+
+  <!-- Batch-Jobs & Adobe Stock Export -->
+  <div class="card">
+    <div class="row" style="justify-content: space-between; align-items: center;">
+      <h3 style="margin: 0;">Batch-Aufträge & Adobe Stock Metadaten</h3>
+      <button class="secondary" onclick="refreshJobs()">Status & Bilder aktualisieren</button>
+    </div>
+    <div id="jobsContainer" style="margin-top: 12px;"></div>
+  </div>
+
+  <script>
+    let queue = [];
+    let allJobs = [];
+
+    // Text sicher in HTML einsetzen (Prompts/Metadaten können <, >, " enthalten)
+    function esc(value) {
+      return String(value ?? '').replace(/[&<>"']/g, (c) => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+      ));
+    }
+
+    // Alle API-Pfade sind RELATIV (ohne führenden Slash), damit die App unter
+    // /bild-studio/ läuft. Liefert geparstes JSON oder wirft einen lesbaren Fehler
+    // (z. B. wenn Nginx bei 401/502/504 eine HTML-Seite statt JSON zurückgibt).
+    async function api(path, options) {
+      const res = await fetch(path, options);
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        throw new Error(`Server antwortete mit HTTP ${res.status} (kein JSON).`);
+      }
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+      return data;
+    }
+
+    const postJson = (path, body) => api(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    function addToQueue() {
+      const input = document.getElementById('promptInput');
+      if (!input.value.trim()) return;
+      queue.push(input.value.trim());
+      input.value = '';
+      renderQueue();
+    }
+
+    function renderQueue() {
+      const sec = document.getElementById('queueSection');
+      const list = document.getElementById('queueList');
+      const btn = document.getElementById('submitBatchBtn');
+      sec.style.display = queue.length ? 'block' : 'none';
+      list.innerHTML = queue.map((p, i) => `<li>${esc(p)} <a href="#" onclick="queue.splice(${i},1);renderQueue();return false;">[entfernen]</a></li>`).join('');
+      btn.textContent = `Batch absenden (${queue.length} Bilder – 50% Rabatt)`;
+    }
+
+    async function generateSingle() {
+      const prompt = document.getElementById('promptInput').value.trim();
+      const model = document.getElementById('modelSelect').value;
+      const imageSize = document.getElementById('sizeSelect').value;
+      const aspectRatio = document.getElementById('ratioSelect').value;
+      const btn = document.getElementById('singleBtn');
+      const status = document.getElementById('singleStatus');
+
+      if (!prompt) return;
+
+      btn.disabled = true;
+      status.textContent = `Generiere ${imageSize}-Bild (${aspectRatio})...`;
+
+      try {
+        const data = await postJson('api/generate-single', { prompt, model, imageSize, aspectRatio });
+
+        document.getElementById('singleResultsCard').style.display = 'block';
+        document.getElementById('singleGrid').insertAdjacentHTML(
+          'afterbegin',
+          renderImageCard(data.imageUrl, data.fileName, null, null)
+        );
+        status.textContent = `Fertig: ${data.fileName} (${data.imageSize}, ${data.aspectRatio})`;
+      } catch (err) {
+        status.textContent = 'Fehler: ' + err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function submitBatch() {
+      const model = document.getElementById('modelSelect').value;
+      const imageSize = document.getElementById('sizeSelect').value;
+      const aspectRatio = document.getElementById('ratioSelect').value;
+      const btn = document.getElementById('submitBatchBtn');
+      const status = document.getElementById('singleStatus');
+
+      btn.disabled = true;
+      try {
+        await postJson('api/batch/start', { prompts: queue, model, imageSize, aspectRatio });
+        queue = [];
+        renderQueue();
+        status.textContent = 'Batch abgesendet.';
+        refreshJobs();
+      } catch (err) {
+        status.textContent = 'Fehler beim Batch-Start: ' + err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function refreshJobs() {
+      const container = document.getElementById('jobsContainer');
+      try {
+        allJobs = await api('api/batch/status');
+      } catch (err) {
+        container.innerHTML = `<p style="color:#dc2626;">Fehler beim Laden der Batch-Aufträge: ${esc(err.message)}</p>`;
+        return;
+      }
+
+      if (!allJobs.length) {
+        container.innerHTML = '<p style="color:#64748b;">Noch keine Batch-Aufträge vorhanden.</p>';
+        return;
+      }
+
+      container.innerHTML = allJobs.map((job) => `
+        <div style="border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; margin-bottom: 14px;">
+          <div class="row" style="justify-content: space-between; align-items: center;">
+            <div>
+              <strong>${esc(job.name)}</strong> <span class="badge">${esc(job.state)}</span>
+              <span style="font-size: 13px; color: #475569;">(${job.count} Bilder | ${esc(job.imageSize || '2K')} | ${esc(job.aspectRatio || '3:2')})</span>
+            </div>
+            ${job.images.length ? `<button class="success" onclick="exportBatchCsv('${esc(job.name)}')">Sammel-CSV für Adobe Stock</button>` : ''}
+          </div>
+          <div class="grid">
+            ${job.images.map((img) => renderImageCard(img.imageUrl, img.fileName, img.metadata, job.name)).join('')}
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function renderImageCard(imageUrl, fileName, metadata, jobName) {
+      const metaId = `meta_${fileName.replace(/\W/g, '_')}`;
+      // Alt-Einträge mit führendem Slash (/images/...) ebenfalls relativ machen
+      const src = esc(String(imageUrl).replace(/^\//, ''));
+      return `
+        <div class="img-card">
+          <a href="${src}" target="_blank"><img src="${src}" alt="${esc(fileName)}" /></a>
+          <div style="font-size: 11px; color: #64748b; margin-bottom: 6px;">${esc(fileName)}</div>
+          <button style="width: 100%; font-size: 13px;" onclick="fetchMetadata('${esc(fileName)}', '${esc(jobName || '')}', '${metaId}')">
+            ${metadata ? 'Metadaten neu generieren' : 'Adobe Titel & Keywords erzeugen'}
+          </button>
+          <div id="${metaId}" style="margin-top: 8px; font-size: 13px;">
+            ${metadata ? formatMetaHtml(metadata) : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    function formatMetaHtml(m) {
+      const keywords = Array.isArray(m.keywords) ? m.keywords : [];
+      return `
+        <strong>Titel:</strong> ${esc(m.title)}<br/>
+        <strong>Kategorie:</strong> ${esc(m.category)}<br/>
+        <strong>Keywords (${keywords.length}):</strong> <span style="color:#334155;">${esc(keywords.join(', '))}</span>
+        ${m.complianceWarning ? `<div class="warn">Prüfhinweis: ${esc(m.complianceWarning)}</div>` : ''}
+      `;
+    }
+
+    async function fetchMetadata(fileName, jobName, metaId) {
+      const box = document.getElementById(metaId);
+      box.innerHTML = '<em>Analysiere Bild mit Gemini Flash...</em>';
+      try {
+        const m = await postJson('api/adobe-metadata', { fileName, jobName: jobName || null });
+        box.innerHTML = formatMetaHtml(m);
+        if (jobName) refreshJobs();
+      } catch (err) {
+        box.innerHTML = `<span style="color:#dc2626;">Fehler: ${esc(err.message)}</span>`;
+      }
+    }
+
+    function exportBatchCsv(jobName) {
+      const job = allJobs.find((j) => j.name === jobName);
+      if (!job) return;
+
+      const rows = ['Filename,Title,Keywords'];
+      for (const img of job.images) {
+        if (!img.metadata) continue;
+        const title = String(img.metadata.title).replace(/"/g, '""');
+        const kw = img.metadata.keywords.join(', ').replace(/"/g, '""');
+        rows.push(`"${img.fileName}","${title}","${kw}"`);
+      }
+
+      if (rows.length === 1) {
+        document.getElementById('singleStatus').textContent =
+          'Bitte zuerst für mindestens ein Bild in diesem Batch die Adobe-Metadaten erzeugen.';
+        return;
+      }
+
+      const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `adobe_stock_${jobName.replace(/\W/g, '_')}.csv`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+    }
+
+    refreshJobs();
+  </script>
+</body>
+</html>
