@@ -7,6 +7,7 @@ import yazl from 'yazl';
 import {
   ADOBE_CATEGORIES,
   buildAdobeCsv,
+  exportFileNames,
   categoryIdFor,
   categoryName,
   csvFileName,
@@ -456,8 +457,9 @@ const findJobFromQuery = (req, res) => {
 
 /**
  * @param extraFiles zusätzliche Dateien im ZIP, z. B. [{ name: 'x.csv', content: '...' }]
+ * @param exportNames Name im ZIP je Datei (exportFileNames, wie in der CSV); sonst Originalname
  */
-const sendImagesZip = (res, fileNames, zipName, extraFiles = []) => {
+const sendImagesZip = (res, fileNames, zipName, extraFiles = [], exportNames = new Map()) => {
   const files = [...new Set(fileNames)].filter(
     (name) => isSafeImageName(name) && fs.existsSync(path.join(IMAGES_DIR, name)),
   );
@@ -467,7 +469,7 @@ const sendImagesZip = (res, fileNames, zipName, extraFiles = []) => {
 
   const zip = new yazl.ZipFile();
   for (const name of files) {
-    zip.addFile(path.join(IMAGES_DIR, name), name, { compress: false });
+    zip.addFile(path.join(IMAGES_DIR, name), exportNames.get(name) ?? name, { compress: false });
   }
   for (const { name, content } of extraFiles) {
     zip.addBuffer(Buffer.from(content, 'utf-8'), name);
@@ -500,12 +502,13 @@ app.get('/api/images', (req, res) => {
 app.get('/api/images/zip', (req, res) => {
   try {
     const stamp = new Date().toISOString().slice(0, 10);
+    const singles = listSingleImages().filter((i) => i.source !== 'upload');
     sendImagesZip(
       res,
-      listSingleImages()
-        .filter((i) => i.source !== 'upload' && !isExportExcluded(i))
-        .map((i) => i.fileName),
+      singles.filter((i) => !isExportExcluded(i)).map((i) => i.fileName),
       `bild-studio_einzelbilder_${stamp}.zip`,
+      [],
+      exportFileNames(singles),
     );
   } catch (error) {
     console.error('Fehler beim ZIP-Download:', error);
@@ -564,6 +567,7 @@ app.get('/api/gallery/zip', (req, res) => {
       images.map((i) => i.fileName),
       `bild-studio_galerie_${slug}_${new Date().toISOString().slice(0, 10)}.zip`,
       csv ? [{ name: `adobe_stock_${slug}.csv`, content: csv }] : [],
+      exportFileNames(images),
     );
   } catch (error) {
     console.error('Fehler beim Galerie-ZIP:', error);
@@ -584,6 +588,7 @@ app.get('/api/batch/zip', (req, res) => {
       (job.images || []).filter((i) => !isExportExcluded(i)).map((i) => i.fileName),
       `bild-studio_${job.name.replace(/\W/g, '_')}.zip`,
       csv ? [{ name: csvFileName(job.name), content: csv }] : [],
+      exportFileNames(job.images),
     );
   } catch (error) {
     console.error('Fehler beim ZIP-Download:', error);
@@ -669,13 +674,15 @@ const listUploadedImages = () => listSingleImages().filter((i) => i.source === '
 // Hochgeladene Bilder als ZIP inkl. Adobe-CSV (ohne ausgeschlossene)
 app.get('/api/uploads/zip', (req, res) => {
   try {
-    const images = listUploadedImages().filter((i) => !isExportExcluded(i));
+    // Gleiche Bildliste wie /api/uploads/csv: identische Namen in ZIP und CSV
+    const images = listUploadedImages();
     const csv = buildAdobeCsv({ images });
     sendImagesZip(
       res,
-      images.map((i) => i.fileName),
+      images.filter((i) => !isExportExcluded(i)).map((i) => i.fileName),
       `bild-studio_hochgeladen_${new Date().toISOString().slice(0, 10)}.zip`,
       csv ? [{ name: UPLOADS_CSV_NAME, content: csv }] : [],
+      exportFileNames(images),
     );
   } catch (error) {
     console.error('Fehler beim ZIP der hochgeladenen Bilder:', error);
