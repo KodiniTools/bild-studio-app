@@ -286,6 +286,69 @@ app.post('/api/adobe-metadata', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// 5. Bilder auflisten & löschen
+// ---------------------------------------------------------------------------
+// Nur einfache Dateinamen ohne Pfadanteile (schützt vor Path Traversal)
+const IMAGE_FILE_RE = /^[\w.-]+\.(png|jpe?g|webp)$/i;
+const isSafeImageName = (name) =>
+  typeof name === 'string' && IMAGE_FILE_RE.test(name) && name === path.basename(name);
+
+// Einzelbilder = alle Bilddateien, die zu keinem Batch-Job gehören (neueste zuerst)
+app.get('/api/images', (req, res) => {
+  try {
+    const jobFiles = new Set(readJobs().flatMap((j) => (j.images || []).map((i) => i.fileName)));
+    const images = fs
+      .readdirSync(IMAGES_DIR, { withFileTypes: true })
+      .filter((d) => d.isFile() && isSafeImageName(d.name) && !jobFiles.has(d.name))
+      .map((d) => ({
+        fileName: d.name,
+        imageUrl: `images/${d.name}`,
+        createdAt: fs.statSync(path.join(IMAGES_DIR, d.name)).mtimeMs,
+      }))
+      .sort((a, b) => b.createdAt - a.createdAt);
+    res.json(images);
+  } catch (error) {
+    console.error('Fehler beim Auflisten der Bilder:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Löscht die Datei und entfernt den Eintrag aus zugehörigen Batch-Jobs
+app.delete('/api/images/:fileName', (req, res) => {
+  try {
+    const { fileName } = req.params;
+    if (!isSafeImageName(fileName)) {
+      return res.status(400).json({ error: 'Ungültiger Dateiname.' });
+    }
+
+    const jobs = readJobs();
+    let jobsChanged = false;
+    for (const job of jobs) {
+      const before = job.images?.length ?? 0;
+      job.images = (job.images || []).filter((i) => i.fileName !== fileName);
+      if (job.images.length !== before) jobsChanged = true;
+    }
+
+    let fileExisted = true;
+    try {
+      fs.unlinkSync(path.join(IMAGES_DIR, fileName));
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      fileExisted = false;
+    }
+
+    if (jobsChanged) saveJobs(jobs);
+    if (!fileExisted && !jobsChanged) {
+      return res.status(404).json({ error: 'Bild nicht gefunden.' });
+    }
+    res.json({ deleted: fileName });
+  } catch (error) {
+    console.error('Fehler beim Löschen:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.listen(PORT, '127.0.0.1', () => {
   console.log(`Gemini Studio Server läuft auf http://127.0.0.1:${PORT}`);
 });

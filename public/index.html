@@ -14,6 +14,7 @@
     button:hover { opacity: 0.92; }
     button.secondary { background: #475569; }
     button.success { background: #059669; }
+    button.danger { background: #dc2626; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-top: 12px; }
     .img-card { border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px; background: #f8fafc; }
@@ -143,11 +144,11 @@
       try {
         const data = await postJson('api/generate-single', { prompt, model, imageSize, aspectRatio });
 
-        document.getElementById('singleResultsCard').style.display = 'block';
         document.getElementById('singleGrid').insertAdjacentHTML(
           'afterbegin',
           renderImageCard(data.imageUrl, data.fileName, null, null)
         );
+        updateSingleCardVisibility();
         status.textContent = `Fertig: ${data.fileName} (${data.imageSize}, ${data.aspectRatio})`;
       } catch (err) {
         status.textContent = 'Fehler: ' + err.message;
@@ -207,6 +208,37 @@
       `).join('');
     }
 
+    // Einzelbilder vom Server laden (bleiben so auch nach einem Neuladen sichtbar)
+    async function loadSingleImages() {
+      const grid = document.getElementById('singleGrid');
+      try {
+        const images = await api('api/images');
+        grid.innerHTML = images.map((img) => renderImageCard(img.imageUrl, img.fileName, null, null)).join('');
+      } catch (err) {
+        document.getElementById('singleStatus').textContent = 'Fehler beim Laden der Einzelbilder: ' + err.message;
+      }
+      updateSingleCardVisibility();
+    }
+
+    function updateSingleCardVisibility() {
+      const hasImages = document.getElementById('singleGrid').children.length > 0;
+      document.getElementById('singleResultsCard').style.display = hasImages ? 'block' : 'none';
+    }
+
+    async function deleteImage(fileName, jobName, btn) {
+      if (!confirm(`Bild "${fileName}" endgültig vom Server löschen?`)) return;
+      btn.disabled = true;
+      try {
+        await api(`api/images/${encodeURIComponent(fileName)}`, { method: 'DELETE' });
+        btn.closest('.img-card').remove();
+        updateSingleCardVisibility();
+        if (jobName) refreshJobs();
+      } catch (err) {
+        btn.disabled = false;
+        document.getElementById('singleStatus').textContent = 'Fehler beim Löschen: ' + err.message;
+      }
+    }
+
     function renderImageCard(imageUrl, fileName, metadata, jobName) {
       const metaId = `meta_${fileName.replace(/\W/g, '_')}`;
       // Alt-Einträge mit führendem Slash (/images/...) ebenfalls relativ machen
@@ -221,6 +253,9 @@
           <div id="${metaId}" style="margin-top: 8px; font-size: 13px;">
             ${metadata ? formatMetaHtml(metadata) : ''}
           </div>
+          <button class="danger" style="width: 100%; font-size: 13px; margin-top: 8px;" onclick="deleteImage('${esc(fileName)}', '${esc(jobName || '')}', this)">
+            Bild löschen
+          </button>
         </div>
       `;
     }
@@ -273,6 +308,7 @@
       URL.revokeObjectURL(link.href);
     }
 
+    loadSingleImages();
     refreshJobs();
   </script>
 </body>
