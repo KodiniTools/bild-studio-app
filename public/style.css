@@ -72,6 +72,11 @@ a.btn-link {
 a.btn-link:hover {
   opacity: 0.92;
 }
+/* Download läuft nach Wahl im Speichern-Dialog */
+.saving {
+  opacity: 0.6;
+  cursor: progress;
+}
 .card-actions {
   display: flex;
   gap: 8px;

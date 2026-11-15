@@ -48,8 +48,17 @@ export default [
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'script',
-      // esc, api, postJson kommen aus public/common.js
-      globals: { ...globals.browser, esc: 'readonly', api: 'readonly', postJson: 'readonly' },
+      // esc, api, postJson, Speichern-Dialog-Helfer kommen aus public/common.js
+      globals: {
+        ...globals.browser,
+        esc: 'readonly',
+        api: 'readonly',
+        postJson: 'readonly',
+        canPickSaveLocation: 'readonly',
+        downloadViaLink: 'readonly',
+        responseErrorText: 'readonly',
+        saveWithDialog: 'readonly',
+      },
     },
     rules: {
       // Top-Level-Funktionen werden über onclick="..." im HTML aufgerufen
