@@ -11,6 +11,7 @@ import {
   categoryName,
   csvFileName,
 } from './lib/adobe.js';
+import { createSingleFlight, settlesWithin } from './lib/refresh.js';
 
 const app = express();
 // Muss zum Nginx-Block passen: proxy_pass http://127.0.0.1:3018/
@@ -41,6 +42,12 @@ const TERMINAL_STATES = new Set([
   'JOB_STATE_CANCELLED',
   'JOB_STATE_EXPIRED',
 ]);
+
+// Statusabfrage: so lange wartet eine Anfrage höchstens auf Gemini, bevor sie den
+// gespeicherten Stand liefert (deutlich unter dem Nginx-Timeout von 180 s)
+const STATUS_WAIT_MS = 20_000;
+// Obergrenze für eine einzelne Abfrage bei Gemini (inkl. Download fertiger Bilder)
+const BATCH_GET_TIMEOUT_MS = 5 * 60_000;
 
 const EXT_BY_MIME = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
 const MIME_BY_EXT = {
@@ -195,62 +202,80 @@ app.post('/api/batch/start', async (req, res) => {
 // ---------------------------------------------------------------------------
 // 3. Batch-Status prüfen & fertige Bilder herunterladen
 // ---------------------------------------------------------------------------
-app.get('/api/batch/status', async (req, res) => {
-  try {
-    const jobs = readJobs();
-    let updated = false;
+// Die Abfrage bei Gemini läuft höchstens einmal gleichzeitig. Bei fertigen Aufträgen
+// enthält die Antwort alle Bilder (bei 4K sehr groß): parallele Abfragen desselben
+// Auftrags haben den Prozess sonst mit CPU-/Speicherlast blockiert und abstürzen lassen.
+const refreshBatchJobs = createSingleFlight(async () => {
+  for (const { name, state } of readJobs()) {
+    if (TERMINAL_STATES.has(state)) continue;
 
-    for (const job of jobs) {
-      if (TERMINAL_STATES.has(job.state)) continue;
-
-      // Ein fehlerhafter Job darf die Statusabfrage der übrigen nicht blockieren
-      let remoteJob;
-      try {
-        remoteJob = await client.batches.get({ name: job.name });
-      } catch (error) {
-        console.error(`Fehler bei Statusabfrage von ${job.name}:`, error);
-        continue;
-      }
-
-      if (remoteJob.state !== job.state) {
-        job.state = remoteJob.state;
-        updated = true;
-      }
-
-      if (
-        remoteJob.state === 'JOB_STATE_SUCCEEDED' &&
-        remoteJob.dest?.inlinedResponses &&
-        job.images.length === 0
-      ) {
-        // Inline-Antworten tragen keinen Key -> Dateiname aus Job-ID + Position
-        const jobId = job.name.replace(/\W/g, '_');
-        remoteJob.dest.inlinedResponses.forEach((item, index) => {
-          const part = findImagePart(item.response);
-          if (!part) {
-            console.error(
-              `Kein Bild für Anfrage ${index} in ${job.name}:`,
-              item.error ?? 'leere Antwort',
-            );
-            return;
-          }
-          const fileName = `${jobId}_${index}.${extForMime(part.inlineData.mimeType)}`;
-          fs.writeFileSync(
-            path.join(IMAGES_DIR, fileName),
-            Buffer.from(part.inlineData.data, 'base64'),
-          );
-          job.images.push({
-            imageUrl: `images/${fileName}`,
-            fileName,
-            prompt: job.prompts?.[index] ?? null,
-            metadata: null,
-          });
-        });
-        updated = true;
-      }
+    // Ein fehlerhafter Job darf die Statusabfrage der übrigen nicht blockieren
+    let remoteJob;
+    try {
+      remoteJob = await client.batches.get({
+        name,
+        config: { httpOptions: { timeout: BATCH_GET_TIMEOUT_MS } },
+      });
+    } catch (error) {
+      console.error(`Fehler bei Statusabfrage von ${name}:`, error);
+      continue;
     }
 
+    // Datei erst jetzt neu lesen: während der Abfrage können Metadaten gespeichert,
+    // Bilder gelöscht oder neue Aufträge angelegt worden sein
+    const jobs = readJobs();
+    const job = jobs.find((j) => j.name === name);
+    if (!job) continue;
+
+    let updated = false;
+    if (remoteJob.state !== job.state) {
+      job.state = remoteJob.state;
+      updated = true;
+    }
+
+    if (
+      remoteJob.state === 'JOB_STATE_SUCCEEDED' &&
+      remoteJob.dest?.inlinedResponses &&
+      job.images.length === 0
+    ) {
+      // Inline-Antworten tragen keinen Key -> Dateiname aus Job-ID + Position
+      const jobId = job.name.replace(/\W/g, '_');
+      remoteJob.dest.inlinedResponses.forEach((item, index) => {
+        const part = findImagePart(item.response);
+        if (!part) {
+          console.error(
+            `Kein Bild für Anfrage ${index} in ${job.name}:`,
+            item.error ?? 'leere Antwort',
+          );
+          return;
+        }
+        const fileName = `${jobId}_${index}.${extForMime(part.inlineData.mimeType)}`;
+        fs.writeFileSync(
+          path.join(IMAGES_DIR, fileName),
+          Buffer.from(part.inlineData.data, 'base64'),
+        );
+        job.images.push({
+          imageUrl: `images/${fileName}`,
+          fileName,
+          prompt: job.prompts?.[index] ?? null,
+          metadata: null,
+        });
+      });
+      updated = true;
+    }
+
+    // Nach jedem Auftrag speichern, damit ein späterer Fehler den Fortschritt nicht verwirft
     if (updated) saveJobs(jobs);
-    res.json(jobs);
+  }
+});
+
+app.get('/api/batch/status', async (req, res) => {
+  try {
+    // Dauert die Abfrage länger (großer Download), läuft sie im Hintergrund weiter und
+    // die Antwort enthält den gespeicherten Stand; der nächste Aufruf zeigt das Ergebnis
+    const finished = await settlesWithin(refreshBatchJobs(), STATUS_WAIT_MS);
+    if (!finished) res.set('X-Batch-Refresh', 'pending');
+    res.json(readJobs());
   } catch (error) {
     console.error('Fehler bei Batch-Status:', error);
     res.status(500).json({ error: error.message });
