@@ -7,6 +7,7 @@ Läuft als Express-Backend hinter Nginx unter `https://kodinitools.com/bild-stud
 
 ```
 server.js                        Express-Backend (API + statische Dateien)
+deploy.sh                        Update/Deployment auf dem Server
 public/index.html                Frontend (relative Pfade, läuft unter jedem Unterpfad)
 deploy/bild-studio.nginx.conf    Nginx-Snippet mit Passwortschutz
 .env.example                     Vorlage für .env
@@ -46,8 +47,13 @@ sudo nginx -t && sudo systemctl reload nginx
 ## Update
 
 ```bash
-cd ~/gemini-studio && git pull && npm ci && pm2 restart bild-studio
+cd ~/gemini-studio && ./deploy.sh
 ```
+
+Das Skript prüft Voraussetzungen (Node >= 20, pm2, `.env` mit `GEMINI_API_KEY`), holt `origin/main` per Fast-Forward,
+führt `npm ci --omit=dev` und den Syntaxcheck aus, startet den PM2-Prozess neu (bzw. legt ihn an) und prüft anschliessend
+`http://127.0.0.1:$PORT/` (ohne API-Kosten). Optionen: `--nginx` (Snippet installieren, `nginx -t`, reload), `--no-pull`,
+`--help`. Variablen: `BRANCH` (Standard `main`), `APP_NAME` (Standard `bild-studio`).
 
 ## Prüfen
 
