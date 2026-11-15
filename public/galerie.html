@@ -148,19 +148,46 @@
       // Überschrift und ZIP-Knopf aus dem aktuellen Stand: nach dem Einsortieren oder
       // Löschen kann ein Ordner leer sein, obwohl die Karte noch angezeigt wird. Ein ZIP für
       // einen leeren Ordner würde der Server mit 404 ablehnen -> Knopf dann ausblenden.
+      // Ausgeschlossene Bilder (Schalter auf der Karte bzw. Prüfhinweis) fehlen in ZIP und
+      // CSV; der Knopf nennt die Anzahl, damit nichts stillschweigend fehlt.
       function updateFolderHeader() {
         const folder = currentFolder();
-        const count = gallery.images.filter((img) => inFolder(img, folder)).length;
+        const images = gallery.images.filter((img) => inFolder(img, folder));
+        const count = images.length;
+        const exportable = images.filter((img) => !isExcluded(img)).length;
         document.getElementById('folderTitle').textContent = loaded
           ? `${folderName(folder)} – ${count} ${count === 1 ? 'Bild' : 'Bilder'}`
           : 'Galerie';
         const zip = document.getElementById('folderZip');
         zip.href = `api/gallery/zip?category=${folder}`;
+        const excludedText = count > exportable ? `, ${count - exportable} ausgeschlossen` : '';
         zip.textContent =
-          folder === 'all' ? 'Alle als ZIP (Ordner je Kategorie)' : 'Ordner als ZIP (inkl. CSV)';
-        zip.style.display = loaded && count ? '' : 'none';
+          folder === 'all'
+            ? `Alle als ZIP (${exportable} Bilder in Ordnern je Kategorie${excludedText})`
+            : `Ordner als ZIP (${exportable} Bilder inkl. CSV${excludedText})`;
+        zip.style.display = loaded && exportable ? '' : 'none';
         return count;
       }
+
+      // Gleiche Regel wie im Backend (lib/adobe.js isExportExcluded)
+      function isExcluded(img) {
+        return typeof img.exportExcluded === 'boolean'
+          ? img.exportExcluded
+          : hasWarning(img.metadata?.complianceWarning);
+      }
+
+      // Zählt Bilder einer Gruppe: gesamt, im Export, im Export mit Metadaten (= CSV-Zeilen)
+      function exportCounts(images) {
+        const exportable = images.filter((img) => !isExcluded(img));
+        return {
+          total: images.length,
+          exportable: exportable.length,
+          csv: exportable.filter((img) => img.metadata).length,
+        };
+      }
+
+      const excludedNote = (c) =>
+        c.total > c.exportable ? `, ${c.total - c.exportable} ausgeschlossen` : '';
 
       function renderGrid() {
         const folder = currentFolder();
@@ -175,29 +202,38 @@
       }
 
       function renderExports() {
-        const singles = gallery.images.filter((i) => i.source === 'single').length;
+        const singles = exportCounts(gallery.images.filter((i) => i.source === 'single'));
         const rows = [];
-        if (singles) {
+        if (singles.total) {
           rows.push(`
           <div class="job-row">
             <div><strong>Sofort erstellte Bilder</strong>
-              <span style="font-size: 13px; color: #475569;">(${singles} Bilder)</span></div>
-            <a class="btn-link" href="api/images/zip" download>Alle als ZIP herunterladen</a>
+              <span style="font-size: 13px; color: #475569;">(${singles.total} Bilder${excludedNote(singles)})</span></div>
+            ${
+              singles.exportable
+                ? `<a class="btn-link" href="api/images/zip" download>Als ZIP herunterladen (${singles.exportable})</a>`
+                : ''
+            }
           </div>`);
         }
         for (const job of gallery.jobs) {
-          if (!job.imageCount) continue;
+          const c = exportCounts(gallery.images.filter((i) => i.jobName === job.name));
+          if (!c.total) continue;
           rows.push(`
           <div class="job-row" data-job="${esc(job.name)}">
             <div>
               <strong>${esc(job.name)}</strong> <span class="badge">${esc(job.state)}</span>
-              <span style="font-size: 13px; color: #475569;">(${job.imageCount} Bilder | ${esc(job.imageSize || '2K')} | ${esc(job.aspectRatio || '3:2')})</span>
+              <span style="font-size: 13px; color: #475569;">(${c.total} Bilder${excludedNote(c)} | ${esc(job.imageSize || '2K')} | ${esc(job.aspectRatio || '3:2')})</span>
             </div>
             <div class="row" style="margin-bottom: 0">
-              <a class="btn-link" href="api/batch/zip?job=${encodeURIComponent(job.name)}" download>Alle als ZIP (${job.imageCount})</a>
+              ${
+                c.exportable
+                  ? `<a class="btn-link" href="api/batch/zip?job=${encodeURIComponent(job.name)}" download>Als ZIP (${c.exportable})</a>`
+                  : ''
+              }
               <button class="success" onclick="exportBatchCsv(this.closest('.job-row').dataset.job)"
-                ${job.metadataCount ? '' : 'disabled title="Erst Metadaten für mindestens ein Bild erzeugen"'}>
-                Sammel-CSV für Adobe Stock
+                ${c.csv ? '' : 'disabled title="Erst Metadaten für mindestens ein Bild im Export erzeugen"'}>
+                Sammel-CSV für Adobe Stock (${c.csv})
               </button>
             </div>
           </div>`);
@@ -236,7 +272,7 @@
         const src = esc(String(img.imageUrl).replace(/^\//, ''));
         const source = img.source === 'batch' ? `Batch: ${esc(img.jobName)}` : 'Sofort erstellt';
         return `
-        <div class="img-card" data-file="${esc(img.fileName)}">
+        <div class="img-card${isExcluded(img) ? ' excluded' : ''}" data-file="${esc(img.fileName)}">
           <a href="${src}" target="_blank"><img src="${src}" alt="${esc(img.fileName)}" loading="lazy" decoding="async" /></a>
           <div style="font-size: 11px; color: #64748b;">${esc(img.fileName)}</div>
           <div class="img-source">${source}</div>
@@ -247,6 +283,7 @@
           <div class="meta-box" style="margin-top: 8px; font-size: 13px;">
             ${img.metadata ? formatMetaHtml(img.metadata, img.categoryId) : ''}
           </div>
+          <div class="export-box">${renderExportToggle(img)}</div>
           <div class="card-actions">
             <a class="btn-link" href="api/images/${encodeURIComponent(img.fileName)}/download" download="${esc(img.fileName)}">
               Herunterladen
@@ -255,6 +292,45 @@
           </div>
         </div>
       `;
+      }
+
+      // Schalter „In ZIP & CSV für Adobe“; ohne eigene Entscheidung gilt: Prüfhinweis -> aus
+      function renderExportToggle(img) {
+        const excluded = isExcluded(img);
+        const auto = typeof img.exportExcluded !== 'boolean';
+        const note = excluded
+          ? `<div class="export-note">Nicht in ZIP & CSV${auto ? ' (automatisch wegen Prüfhinweis)' : ''}. Das Bild bleibt in der Galerie.</div>`
+          : '';
+        return `
+          <label class="export-toggle">
+            <input type="checkbox" ${excluded ? '' : 'checked'} onchange="toggleExport(this)" />
+            In ZIP & CSV für Adobe aufnehmen
+          </label>${note}`;
+      }
+
+      // Aktualisiert Karte, Ordnerkopf und Download-Zeilen nach einer Änderung am Export
+      function refreshExportState(card, img) {
+        card.classList.toggle('excluded', isExcluded(img));
+        card.querySelector('.export-box').innerHTML = renderExportToggle(img);
+        updateFolderHeader();
+        renderExports();
+      }
+
+      async function toggleExport(checkbox) {
+        const card = checkbox.closest('.img-card');
+        const img = imageOf(checkbox);
+        if (!img) return;
+        const include = checkbox.checked;
+        checkbox.disabled = true;
+        try {
+          await postJson(`api/images/${encodeURIComponent(img.fileName)}/export`, { include });
+          img.exportExcluded = !include;
+          refreshExportState(card, img);
+        } catch (err) {
+          checkbox.checked = !include;
+          checkbox.disabled = false;
+          setStatus('Fehler beim Ändern des Exports: ' + err.message);
+        }
       }
 
       // Modell liefert bei fehlendem Hinweis teils Platzhalter wie "None" oder "N/A"
@@ -295,18 +371,15 @@
             fileName: img.fileName,
             jobName: img.jobName,
           });
-          const hadMetadata = Boolean(img.metadata);
           img.metadata = m;
           img.categoryId = m.categoryId ?? null;
           box.innerHTML = formatMetaHtml(m, img.categoryId);
           btn.textContent = 'Metadaten neu generieren';
-          const job = gallery.jobs.find((j) => j.name === img.jobName);
-          if (job && !hadMetadata) job.metadataCount += 1;
-          // Ordnerzähler und CSV-Knöpfe aktualisieren; die Karte bleibt bis zum nächsten
-          // Ordnerwechsel stehen, damit sie nicht unter dem Mauszeiger verschwindet
+          // Ordnerzähler, Export-Schalter (Prüfhinweis kann sich geändert haben) und
+          // Download-Zeilen aktualisieren; die Karte bleibt bis zum nächsten Ordnerwechsel
+          // stehen, damit sie nicht unter dem Mauszeiger verschwindet
           renderFolders();
-          renderExports();
-          updateFolderHeader();
+          refreshExportState(card, img);
           if (!inFolder(img, currentFolder())) {
             const target = img.categoryId ?? 'none';
             box.insertAdjacentHTML(
@@ -329,11 +402,6 @@
         try {
           await api(`api/images/${encodeURIComponent(img.fileName)}`, { method: 'DELETE' });
           gallery.images = gallery.images.filter((i) => i !== img);
-          const job = gallery.jobs.find((j) => j.name === img.jobName);
-          if (job) {
-            job.imageCount -= 1;
-            if (img.metadata) job.metadataCount -= 1;
-          }
           btn.closest('.img-card').remove();
           renderFolders();
           renderExports();

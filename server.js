@@ -10,6 +10,7 @@ import {
   categoryIdFor,
   categoryName,
   csvFileName,
+  isExportExcluded,
 } from './lib/adobe.js';
 import {
   UNCATEGORIZED,
@@ -400,6 +401,7 @@ const listSingleImages = () => {
         imageSize: info.imageSize ?? null,
         aspectRatio: info.aspectRatio ?? null,
         metadata: info.metadata ?? null,
+        exportExcluded: info.exportExcluded,
       };
     })
     .sort((a, b) => b.createdAt - a.createdAt);
@@ -475,7 +477,9 @@ app.get('/api/images/zip', (req, res) => {
     const stamp = new Date().toISOString().slice(0, 10);
     sendImagesZip(
       res,
-      listSingleImages().map((i) => i.fileName),
+      listSingleImages()
+        .filter((i) => !isExportExcluded(i))
+        .map((i) => i.fileName),
       `bild-studio_einzelbilder_${stamp}.zip`,
     );
   } catch (error) {
@@ -524,6 +528,7 @@ app.get('/api/gallery/zip', (req, res) => {
     const images = readGalleryImages().filter(
       (img) =>
         inFolder(img, folder) &&
+        !img.excluded &&
         isSafeImageName(img.fileName) &&
         fs.existsSync(path.join(IMAGES_DIR, img.fileName)),
     );
@@ -553,7 +558,7 @@ app.get('/api/batch/zip', (req, res) => {
     const csv = buildAdobeCsv(job);
     sendImagesZip(
       res,
-      (job.images || []).map((i) => i.fileName),
+      (job.images || []).filter((i) => !isExportExcluded(i)).map((i) => i.fileName),
       `bild-studio_${job.name.replace(/\W/g, '_')}.zip`,
       csv ? [{ name: csvFileName(job.name), content: csv }] : [],
     );
@@ -572,7 +577,9 @@ app.get('/api/batch/csv', (req, res) => {
     const csv = buildAdobeCsv(job);
     if (!csv) {
       return res.status(404).json({
-        error: 'Bitte zuerst für mindestens ein Bild in diesem Batch die Adobe-Metadaten erzeugen.',
+        error:
+          'Keine Bilder für die CSV: Bitte für mindestens ein Bild die Adobe-Metadaten erzeugen ' +
+          'und es in den Adobe-Export aufnehmen.',
       });
     }
     res.attachment(csvFileName(job.name));
@@ -607,6 +614,42 @@ app.get('/api/images/:fileName/download', (req, res) => {
       res.status(500).json({ error: 'Download fehlgeschlagen.' });
     },
   );
+});
+
+// Bild in ZIP/CSV für Adobe aufnehmen oder ausschließen ({ include: true|false }).
+// Ändert nur die gespeicherte Entscheidung; die Bilddatei bleibt unverändert.
+app.post('/api/images/:fileName/export', (req, res) => {
+  try {
+    const { fileName } = req.params;
+    const { include } = req.body ?? {};
+    if (!isSafeImageName(fileName)) {
+      return res.status(400).json({ error: 'Ungültiger Dateiname.' });
+    }
+    if (typeof include !== 'boolean') {
+      return res.status(400).json({ error: 'include (true/false) fehlt.' });
+    }
+
+    const jobs = readJobs();
+    const img = jobs.flatMap((j) => j.images || []).find((i) => i.fileName === fileName);
+    if (img) {
+      img.exportExcluded = !include;
+      saveJobs(jobs);
+    } else {
+      if (!fs.existsSync(path.join(IMAGES_DIR, fileName))) {
+        return res.status(404).json({ error: 'Bild nicht gefunden.' });
+      }
+      const singles = readSingles();
+      singles[fileName] = {
+        ...(singles[fileName] || { prompt: null, metadata: null }),
+        exportExcluded: !include,
+      };
+      saveSingles(singles);
+    }
+    res.json({ fileName, exportExcluded: !include });
+  } catch (error) {
+    console.error('Fehler beim Ändern des Exports:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Löscht die Datei und entfernt den Eintrag aus zugehörigen Batch-Jobs
