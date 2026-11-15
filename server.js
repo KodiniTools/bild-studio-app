@@ -3,6 +3,7 @@ import express from 'express';
 import { GoogleGenAI, Type } from '@google/genai';
 import * as fs from 'fs';
 import * as path from 'path';
+import yazl from 'yazl';
 
 const app = express();
 // Muss zum Nginx-Block passen: proxy_pass http://127.0.0.1:3018/
@@ -305,21 +306,92 @@ const isSafeImageName = (name) =>
   typeof name === 'string' && IMAGE_FILE_RE.test(name) && name === path.basename(name);
 
 // Einzelbilder = alle Bilddateien, die zu keinem Batch-Job gehören (neueste zuerst)
+const listSingleImages = () => {
+  const jobFiles = new Set(readJobs().flatMap((j) => (j.images || []).map((i) => i.fileName)));
+  return fs
+    .readdirSync(IMAGES_DIR, { withFileTypes: true })
+    .filter((d) => d.isFile() && isSafeImageName(d.name) && !jobFiles.has(d.name))
+    .map((d) => ({
+      fileName: d.name,
+      imageUrl: `images/${d.name}`,
+      createdAt: fs.statSync(path.join(IMAGES_DIR, d.name)).mtimeMs,
+    }))
+    .sort((a, b) => b.createdAt - a.createdAt);
+};
+
+/**
+ * Streamt die angegebenen Bilder als ZIP-Download. Die Dateien werden unverändert
+ * (Originalgröße, ohne Neukomprimierung) und unkomprimiert abgelegt: PNG/JPEG/WebP
+ * sind bereits komprimiert, so bleibt der Download schnell.
+ */
+const sendImagesZip = (res, fileNames, zipName) => {
+  const files = [...new Set(fileNames)].filter(
+    (name) => isSafeImageName(name) && fs.existsSync(path.join(IMAGES_DIR, name)),
+  );
+  if (files.length === 0) {
+    return res.status(404).json({ error: 'Keine Bilder zum Herunterladen vorhanden.' });
+  }
+
+  const zip = new yazl.ZipFile();
+  for (const name of files) {
+    zip.addFile(path.join(IMAGES_DIR, name), name, { compress: false });
+  }
+  zip.end();
+
+  res.attachment(zipName);
+  res.type('application/zip');
+  zip.outputStream.on('error', (error) => {
+    console.error('Fehler beim Erstellen des ZIP:', error);
+    res.destroy(error);
+  });
+  // Abbruch durch den Client: ZIP-Erzeugung nicht weiterlaufen lassen
+  res.on('close', () => {
+    if (!res.writableFinished) zip.outputStream.destroy();
+  });
+  zip.outputStream.pipe(res);
+};
+
 app.get('/api/images', (req, res) => {
   try {
-    const jobFiles = new Set(readJobs().flatMap((j) => (j.images || []).map((i) => i.fileName)));
-    const images = fs
-      .readdirSync(IMAGES_DIR, { withFileTypes: true })
-      .filter((d) => d.isFile() && isSafeImageName(d.name) && !jobFiles.has(d.name))
-      .map((d) => ({
-        fileName: d.name,
-        imageUrl: `images/${d.name}`,
-        createdAt: fs.statSync(path.join(IMAGES_DIR, d.name)).mtimeMs,
-      }))
-      .sort((a, b) => b.createdAt - a.createdAt);
-    res.json(images);
+    res.json(listSingleImages());
   } catch (error) {
     console.error('Fehler beim Auflisten der Bilder:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Alle Einzelbilder als ZIP
+app.get('/api/images/zip', (req, res) => {
+  try {
+    const stamp = new Date().toISOString().slice(0, 10);
+    sendImagesZip(
+      res,
+      listSingleImages().map((i) => i.fileName),
+      `bild-studio_einzelbilder_${stamp}.zip`,
+    );
+  } catch (error) {
+    console.error('Fehler beim ZIP-Download:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Alle Bilder eines Batch-Jobs als ZIP (?job=batches/...)
+app.get('/api/batch/zip', (req, res) => {
+  try {
+    const jobName = req.query.job;
+    if (typeof jobName !== 'string' || !jobName) {
+      return res.status(400).json({ error: 'Parameter job fehlt.' });
+    }
+    const job = readJobs().find((j) => j.name === jobName);
+    if (!job) return res.status(404).json({ error: 'Batch-Auftrag nicht gefunden.' });
+
+    sendImagesZip(
+      res,
+      (job.images || []).map((i) => i.fileName),
+      `bild-studio_${jobName.replace(/\W/g, '_')}.zip`,
+    );
+  } catch (error) {
+    console.error('Fehler beim ZIP-Download:', error);
     res.status(500).json({ error: error.message });
   }
 });

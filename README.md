@@ -37,6 +37,8 @@ Auf dem Server installiert `deploy.sh` nur die Laufzeit-Abhängigkeiten (`npm ci
 | GET     | `/api/batch/status`              | Status prüfen, fertige Bilder herunterladen   |
 | POST    | `/api/adobe-metadata`            | Titel, Keywords und Kategorie zu einem Bild   |
 | GET     | `/api/images`                    | Einzelbilder (ohne Batch-Zuordnung) auflisten |
+| GET     | `/api/images/zip`                | Alle Einzelbilder als ZIP                     |
+| GET     | `/api/batch/zip?job=<name>`      | Alle Bilder eines Batch-Auftrags als ZIP      |
 | GET     | `/api/images/:fileName/download` | Bild als Datei herunterladen                  |
 | DELETE  | `/api/images/:fileName`          | Bild löschen (Datei + Eintrag im Batch-Job)   |
 
@@ -80,6 +82,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://kodinitools.com/bild-studio/   
 
 ## Hinweise
 
+- Bilder werden unverändert so gespeichert, wie die Gemini-API sie liefert. Einzel- und ZIP-Downloads enthalten immer die Originaldateien (volle Auflösung, keine Neukomprimierung).
 - Der Server lauscht nur auf `127.0.0.1`; Zugriff von aussen ausschliesslich über Nginx mit Basic Auth.
 - Jeder Aufruf von `generate-single`, `batch/start` und `adobe-metadata` verursacht API-Kosten.
 - Der Port (`PORT`, Standard 3018) muss zum `proxy_pass` im Nginx-Snippet passen.
