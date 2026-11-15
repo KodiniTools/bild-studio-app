@@ -17,7 +17,12 @@ if (!process.env.GEMINI_API_KEY) {
   process.exit(1);
 }
 
-const client = new GoogleGenAI({});
+// Das SDK (ab 3.x) nutzt standardmäßig API-Version 'v1'; Preview-Modelle wie
+// gemini-3-pro-image-preview gibt es nur unter 'v1beta'. Ist GOOGLE_GENAI_API_VERSION
+// gesetzt, löst das SDK die Version selbst auf (inkl. Alias 'beta').
+const client = new GoogleGenAI({
+  apiVersion: process.env.GOOGLE_GENAI_API_VERSION ? undefined : 'v1beta',
+});
 const JOBS_FILE = './batch_jobs.json';
 const IMAGES_DIR = './public/images';
 
