@@ -268,11 +268,21 @@
       // (z. B. wenn Nginx bei 401/502/504 eine HTML-Seite statt JSON zurückgibt).
       async function api(path, options) {
         const res = await fetch(path, options);
+        const text = await res.text();
         let data;
         try {
-          data = await res.json();
+          data = JSON.parse(text);
         } catch {
-          throw new Error(`Server antwortete mit HTTP ${res.status} (kein JSON).`);
+          // Anfang der Antwort mit ausgeben: zeigt, wer geantwortet hat (Nginx, Express, ...)
+          const hint = text
+            .replace(/<[^>]*>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 120);
+          throw new Error(
+            `Server antwortete mit HTTP ${res.status} (kein JSON).` +
+              (hint ? ` Antwort: „${hint}“` : ' Antwort war leer.'),
+          );
         }
         if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
         return data;
@@ -370,17 +380,22 @@
         try {
           allJobs = await api('api/batch/status');
         } catch (err) {
-          container.innerHTML = `<p style="color:#dc2626;">Fehler beim Laden der Batch-Aufträge: ${esc(err.message)}</p>`;
+          // Zuletzt geladene Aufträge stehen lassen: ein einzelner Fehlschlag darf die
+          // bereits angezeigten Bilder nicht von der Seite entfernen
+          const errorHtml = `<p style="color:#dc2626;">Fehler beim Laden der Batch-Aufträge: ${esc(err.message)}</p>`;
+          container.innerHTML = allJobs.length
+            ? `${errorHtml}<p style="color:#64748b;">Angezeigt wird der zuletzt geladene Stand.</p>${renderJobs()}`
+            : errorHtml;
           return;
         }
 
-        if (!allJobs.length) {
-          container.innerHTML =
-            '<p style="color:#64748b;">Noch keine Batch-Aufträge vorhanden.</p>';
-          return;
-        }
+        container.innerHTML = allJobs.length
+          ? renderJobs()
+          : '<p style="color:#64748b;">Noch keine Batch-Aufträge vorhanden.</p>';
+      }
 
-        container.innerHTML = allJobs
+      function renderJobs() {
+        return allJobs
           .map(
             (job) => `
         <div style="border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; margin-bottom: 14px;">
@@ -521,7 +536,14 @@
         try {
           const m = await postJson('api/adobe-metadata', { fileName, jobName: jobName || null });
           box.innerHTML = formatMetaHtml(m);
-          if (jobName) refreshJobs();
+          if (jobName) {
+            // Lokalen Stand mitführen: bleibt sichtbar, falls das Neuladen der Liste scheitert
+            const img = allJobs
+              .find((j) => j.name === jobName)
+              ?.images.find((i) => i.fileName === fileName);
+            if (img) img.metadata = m;
+            refreshJobs();
+          }
         } catch (err) {
           box.innerHTML = `<span style="color:#dc2626;">Fehler: ${esc(err.message)}</span>`;
         }
