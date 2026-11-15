@@ -145,10 +145,21 @@
         }
       }
 
-      function updateFolderTitle(count) {
+      // Überschrift und ZIP-Knopf aus dem aktuellen Stand: nach dem Einsortieren oder
+      // Löschen kann ein Ordner leer sein, obwohl die Karte noch angezeigt wird. Ein ZIP für
+      // einen leeren Ordner würde der Server mit 404 ablehnen -> Knopf dann ausblenden.
+      function updateFolderHeader() {
+        const folder = currentFolder();
+        const count = gallery.images.filter((img) => inFolder(img, folder)).length;
         document.getElementById('folderTitle').textContent = loaded
-          ? `${folderName(currentFolder())} – ${count} ${count === 1 ? 'Bild' : 'Bilder'}`
+          ? `${folderName(folder)} – ${count} ${count === 1 ? 'Bild' : 'Bilder'}`
           : 'Galerie';
+        const zip = document.getElementById('folderZip');
+        zip.href = `api/gallery/zip?category=${folder}`;
+        zip.textContent =
+          folder === 'all' ? 'Alle als ZIP (Ordner je Kategorie)' : 'Ordner als ZIP (inkl. CSV)';
+        zip.style.display = loaded && count ? '' : 'none';
+        return count;
       }
 
       function renderGrid() {
@@ -157,12 +168,7 @@
         // Beim Ordnerwechsel oben anfangen; beim Neuzeichnen desselben Ordners Position halten
         if (folder !== renderedFolder) document.getElementById('gridScroll').scrollTop = 0;
         renderedFolder = folder;
-        updateFolderTitle(images.length);
-        const zip = document.getElementById('folderZip');
-        zip.href = `api/gallery/zip?category=${folder}`;
-        zip.textContent =
-          folder === 'all' ? 'Alle als ZIP (Ordner je Kategorie)' : 'Ordner als ZIP (inkl. CSV)';
-        zip.style.display = loaded && images.length ? '' : 'none';
+        updateFolderHeader();
         document.getElementById('grid').innerHTML = images.length
           ? images.map(renderImageCard).join('')
           : `<p style="color:#64748b;">${loaded ? 'Keine Bilder in diesem Ordner.' : 'Lade Galerie ...'}</p>`;
@@ -300,10 +306,12 @@
           // Ordnerwechsel stehen, damit sie nicht unter dem Mauszeiger verschwindet
           renderFolders();
           renderExports();
+          updateFolderHeader();
           if (!inFolder(img, currentFolder())) {
+            const target = img.categoryId ?? 'none';
             box.insertAdjacentHTML(
               'beforeend',
-              `<div class="hint" style="margin: 6px 0 0">Einsortiert in Ordner „${esc(folderName(img.categoryId ?? 'none'))}“.</div>`,
+              `<div class="hint" style="margin: 6px 0 0">Einsortiert in Ordner „${esc(folderName(target))}“ – <a href="#ordner=${target}">dorthin wechseln</a>.</div>`,
             );
           }
         } catch (err) {
@@ -329,9 +337,8 @@
           btn.closest('.img-card').remove();
           renderFolders();
           renderExports();
-          const count = gallery.images.filter((i) => inFolder(i, currentFolder())).length;
-          if (count === 0) renderGrid();
-          else updateFolderTitle(count);
+          // Leerer Ordner: Hinweis statt leerer Fläche (auch verschobene Karten verschwinden)
+          if (updateFolderHeader() === 0) renderGrid();
         } catch (err) {
           btn.disabled = false;
           setStatus('Fehler beim Löschen: ' + err.message);
