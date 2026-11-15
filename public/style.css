@@ -284,3 +284,15 @@ textarea#promptInput {
   margin-bottom: 6px;
   overflow-wrap: anywhere;
 }
+
+/* Galerie: Bildbereich scrollt in sich (Höhe = Fenster minus Kopfzeile/Überschrift) */
+.gallery-scroll {
+  max-height: max(420px, calc(100vh - 150px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin-top: 12px;
+  padding-right: 6px;
+}
+.gallery-scroll .grid {
+  margin-top: 0;
+}

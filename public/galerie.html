@@ -39,7 +39,10 @@
           Als ZIP herunterladen
         </a>
       </div>
-      <div id="grid" class="grid"></div>
+      <!-- Eigener Scrollbereich: Ordner oben und Downloads unten bleiben erreichbar -->
+      <div id="gridScroll" class="gallery-scroll">
+        <div id="grid" class="grid"></div>
+      </div>
     </div>
 
     <!-- Downloads wie bisher: Sofort-Bilder bzw. je Batch-Auftrag (inkl. Adobe-CSV) -->
@@ -151,6 +154,8 @@
       function renderGrid() {
         const folder = currentFolder();
         const images = gallery.images.filter((img) => inFolder(img, folder));
+        // Beim Ordnerwechsel oben anfangen; beim Neuzeichnen desselben Ordners Position halten
+        if (folder !== renderedFolder) document.getElementById('gridScroll').scrollTop = 0;
         renderedFolder = folder;
         updateFolderTitle(images.length);
         const zip = document.getElementById('folderZip');
