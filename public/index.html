@@ -181,7 +181,10 @@
 
     <!-- Einzelbilder (Sofort-Ergebnisse) -->
     <div id="singleResultsCard" class="card" style="display: none">
-      <h3>Sofort erstellte Bilder</h3>
+      <div class="row" style="justify-content: space-between; align-items: center">
+        <h3 style="margin: 0">Sofort erstellte Bilder</h3>
+        <a class="btn-link" href="api/images/zip" download>Alle als ZIP herunterladen</a>
+      </div>
       <div id="singleGrid" class="grid"></div>
     </div>
 
@@ -331,7 +334,14 @@
               <strong>${esc(job.name)}</strong> <span class="badge">${esc(job.state)}</span>
               <span style="font-size: 13px; color: #475569;">(${job.count} Bilder | ${esc(job.imageSize || '2K')} | ${esc(job.aspectRatio || '3:2')})</span>
             </div>
-            ${job.images.length ? `<button class="success" onclick="exportBatchCsv('${esc(job.name)}')">Sammel-CSV für Adobe Stock</button>` : ''}
+            ${
+              job.images.length
+                ? `<div class="row" style="margin-bottom: 0">
+                    <a class="btn-link" href="api/batch/zip?job=${encodeURIComponent(job.name)}" download>Alle als ZIP (${job.images.length})</a>
+                    <button class="success" onclick="exportBatchCsv('${esc(job.name)}')">Sammel-CSV für Adobe Stock</button>
+                  </div>`
+                : ''
+            }
           </div>
           <div class="grid">
             ${job.images.map((img) => renderImageCard(img.imageUrl, img.fileName, img.metadata, job.name)).join('')}
