@@ -103,6 +103,15 @@
         return cat ? `${cat.name} (Adobe-Nr. ${cat.id})` : `Kategorie ${folder}`;
       }
 
+      // Gleiche Namen wie im Backend (server.js), nur als Vorschlag im Speichern-Dialog
+      const today = () => new Date().toISOString().slice(0, 10);
+      function folderSlug(folder) {
+        if (folder === 'all') return 'alle';
+        if (folder === 'none') return 'ohne_kategorie';
+        const cat = gallery.categories.find((c) => c.id === folder);
+        return `${String(folder).padStart(2, '0')}_${String(cat?.name ?? '').replace(/\W/g, '_')}`;
+      }
+
       function setStatus(text) {
         document.getElementById('galleryStatus').textContent = text;
       }
@@ -186,6 +195,7 @@
           : 'Galerie';
         const zip = document.getElementById('folderZip');
         zip.href = `api/gallery/zip?category=${folder}`;
+        zip.download = `bild-studio_galerie_${folderSlug(folder)}_${today()}.zip`;
         const excludedText = count > exportable ? `, ${count - exportable} ausgeschlossen` : '';
         zip.textContent =
           folder === 'all'
@@ -237,7 +247,7 @@
               <span style="font-size: 13px; color: #475569;">(${singles.total} Bilder${excludedNote(singles)})</span></div>
             ${
               singles.exportable
-                ? `<a class="btn-link" href="api/images/zip" download>Als ZIP herunterladen (${singles.exportable})</a>`
+                ? `<a class="btn-link" href="api/images/zip" download="bild-studio_einzelbilder_${today()}.zip">Als ZIP herunterladen (${singles.exportable})</a>`
                 : ''
             }
           </div>`);
@@ -251,10 +261,10 @@
             <div class="row" style="margin-bottom: 0">
               ${
                 uploads.exportable
-                  ? `<a class="btn-link" href="api/uploads/zip" download>Als ZIP inkl. CSV (${uploads.exportable})</a>`
+                  ? `<a class="btn-link" href="api/uploads/zip" download="bild-studio_hochgeladen_${today()}.zip">Als ZIP inkl. CSV (${uploads.exportable})</a>`
                   : ''
               }
-              <button class="success" onclick="downloadCsv('api/uploads/csv', 'adobe_stock_hochgeladen.csv')"
+              <button class="success" onclick="downloadCsv('api/uploads/csv', 'adobe_stock_hochgeladen.csv', this)"
                 ${uploads.csv ? '' : 'disabled title="Erst Metadaten für mindestens ein Bild im Export erzeugen"'}>
                 CSV für Adobe Stock (${uploads.csv})
               </button>
@@ -273,10 +283,10 @@
             <div class="row" style="margin-bottom: 0">
               ${
                 c.exportable
-                  ? `<a class="btn-link" href="api/batch/zip?job=${encodeURIComponent(job.name)}" download>Als ZIP (${c.exportable})</a>`
+                  ? `<a class="btn-link" href="api/batch/zip?job=${encodeURIComponent(job.name)}" download="${esc(`bild-studio_${job.name.replace(/\W/g, '_')}.zip`)}">Als ZIP (${c.exportable})</a>`
                   : ''
               }
-              <button class="success" onclick="exportBatchCsv(this.closest('.job-row').dataset.job)"
+              <button class="success" onclick="exportBatchCsv(this.closest('.job-row').dataset.job, this)"
                 ${c.csv ? '' : 'disabled title="Erst Metadaten für mindestens ein Bild im Export erzeugen"'}>
                 Sammel-CSV für Adobe Stock (${c.csv})
               </button>
@@ -471,35 +481,62 @@
       }
 
       // CSV wird serverseitig erzeugt (identisch zur CSV im Batch-ZIP)
-      function exportBatchCsv(jobName) {
+      function exportBatchCsv(jobName, el) {
         return downloadCsv(
           `api/batch/csv?job=${encodeURIComponent(jobName)}`,
           `adobe_stock_${jobName.replace(/\W/g, '_')}.csv`,
+          el,
         );
       }
 
-      async function downloadCsv(url, fileName) {
+      // Bisheriger CSV-Download ohne Speichern-Dialog (Firefox/Safari): erst laden,
+      // damit Server-Fehler als Meldung erscheinen statt als heruntergeladene Datei
+      async function downloadCsvBlob(url, fileName) {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(await responseErrorText(res));
+        const blob = await res.blob();
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = fileName;
+        link.click();
+        URL.revokeObjectURL(link.href);
+      }
+
+      function downloadCsv(url, fileName, el) {
+        return saveDownload(el, url, fileName, 'CSV-Export', () => downloadCsvBlob(url, fileName));
+      }
+
+      /**
+       * Download mit Speichern-Dialog; markiert Knopf/Link während des Speicherns
+       * und meldet Erfolg/Fehler in der Statuszeile.
+       */
+      async function saveDownload(el, url, fileName, label, fallback) {
         try {
-          const res = await fetch(url);
-          if (!res.ok) {
-            let message = `HTTP ${res.status}`;
-            try {
-              message = (await res.json()).error || message;
-            } catch {
-              // keine JSON-Antwort (z. B. Nginx-Fehlerseite)
-            }
-            throw new Error(message);
-          }
-          const blob = await res.blob();
-          const link = document.createElement('a');
-          link.href = URL.createObjectURL(blob);
-          link.download = fileName;
-          link.click();
-          URL.revokeObjectURL(link.href);
+          const saving = saveWithDialog(url, fileName, fallback);
+          if (el && canPickSaveLocation()) el.classList.add('saving');
+          const saved = await saving;
+          if (saved) setStatus(`Gespeichert: ${saved}`);
         } catch (err) {
-          setStatus('CSV-Export: ' + err.message);
+          setStatus(`${label}: ${err.message}`);
+        } finally {
+          el?.classList.remove('saving');
         }
       }
+
+      // Alle Download-Links (ZIP, einzelnes Bild) öffnen den Speichern-Dialog,
+      // sofern der Browser ihn kann; sonst bleibt der normale Link-Download.
+      // Strg/Umschalt/Cmd/Alt-Klick behält das gewohnte Browserverhalten.
+      document.addEventListener('click', (event) => {
+        const link = event.target.closest('a[download]');
+        if (!link || !canPickSaveLocation()) return;
+        if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)
+          return;
+        event.preventDefault();
+        const fileName = link.getAttribute('download') || 'download';
+        saveDownload(link, link.href, fileName, 'Download', () =>
+          downloadViaLink(link.href, fileName),
+        );
+      });
 
       // ---------------------------------------------------------------------
       // Eigene Bilder hochladen
