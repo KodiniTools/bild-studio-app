@@ -1,13 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { batchFileName, batchImageIndex, extractBatchImages, failureReason } from '../lib/batch.js';
+import { batchFileName, batchImageIndex, failureReason } from '../lib/batch.js';
 import { createMutex } from '../lib/refresh.js';
 
 const JOB = 'batches/abc-1';
-const image = (mimeType = 'image/jpeg') => ({
-  response: { candidates: [{ content: { parts: [{ inlineData: { mimeType, data: 'QUJD' } }] } }] },
-});
-
 test('Dateiname und Position gehören zusammen', () => {
   assert.equal(batchFileName(JOB, 3, 'image/jpeg'), 'batches_abc_1_3.jpg');
   assert.equal(batchFileName(JOB, 0, 'application/x'), 'batches_abc_1_0.png');
@@ -19,45 +15,23 @@ test('Dateiname und Position gehören zusammen', () => {
   assert.equal(batchImageIndex('batches/abc', 'batches_abc_1_3.jpg'), -1);
 });
 
-test('extractBatchImages: Bilder und Fehlschläge mit Grund', () => {
-  const { found, failures } = extractBatchImages(JOB, [
-    image(),
-    { error: { code: 429, message: 'Quota exceeded' } },
-    { response: { candidates: [{ finishReason: 'IMAGE_SAFETY', content: { parts: [] } }] } },
-    { response: { promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } } },
-    { response: { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'x' }] } }] } },
-    image('image/png'),
-  ]);
-  assert.deepEqual(
-    found.map((f) => [f.index, f.fileName, f.data]),
-    [
-      [0, 'batches_abc_1_0.jpg', 'QUJD'],
-      [5, 'batches_abc_1_5.png', 'QUJD'],
-    ],
+test('failureReason: Grund aus Fehler, Ablehnung oder Abbruchgrund', () => {
+  assert.equal(
+    failureReason({ error: { code: 429, message: 'Quota exceeded' } }),
+    'Quota exceeded',
   );
-  assert.deepEqual(failures, [
-    { index: 1, reason: 'Quota exceeded' },
-    { index: 2, reason: 'kein Bild (IMAGE_SAFETY)' },
-    { index: 3, reason: 'Prompt abgelehnt (PROHIBITED_CONTENT)' },
-    { index: 4, reason: 'Antwort ohne Bild' },
-  ]);
-});
-
-test('extractBatchImages: vorhandene Positionen bleiben unberührt', () => {
-  const { found, failures } = extractBatchImages(
-    JOB,
-    [image(), image(), { error: {} }],
-    new Set([0, 2]),
+  assert.equal(
+    failureReason({ response: { candidates: [{ finishReason: 'IMAGE_SAFETY' }] } }),
+    'kein Bild (IMAGE_SAFETY)',
   );
-  assert.deepEqual(
-    found.map((f) => f.index),
-    [1],
+  assert.equal(
+    failureReason({ response: { promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } } }),
+    'Prompt abgelehnt (PROHIBITED_CONTENT)',
   );
-  assert.deepEqual(failures, []);
-});
-
-test('extractBatchImages: fehlende Ergebnisse ergeben leere Listen', () => {
-  assert.deepEqual(extractBatchImages(JOB, undefined), { found: [], failures: [] });
+  assert.equal(
+    failureReason({ response: { candidates: [{ finishReason: 'STOP' }] } }),
+    'Antwort ohne Bild',
+  );
   assert.equal(failureReason(undefined), 'Antwort ohne Bild');
 });
 

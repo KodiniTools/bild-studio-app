@@ -22,7 +22,8 @@ import {
   parseFolder,
 } from './lib/gallery.js';
 import { createMutex, createSingleFlight, settlesWithin } from './lib/refresh.js';
-import { batchImageIndex, extForMime, extractBatchImages, findImagePart } from './lib/batch.js';
+import { batchFileName, batchImageIndex, extForMime, findImagePart } from './lib/batch.js';
+import { fetchBatchJob } from './lib/batch-fetch.js';
 import { MAX_UPLOAD_BYTES, detectImageType, uploadFileName } from './lib/upload.js';
 
 const app = express();
@@ -59,7 +60,12 @@ const TERMINAL_STATES = new Set([
 // gespeicherten Stand liefert (deutlich unter dem Nginx-Timeout von 180 s)
 const STATUS_WAIT_MS = 20_000;
 // Obergrenze für eine einzelne Abfrage bei Gemini (inkl. Download fertiger Bilder)
-const BATCH_GET_TIMEOUT_MS = 5 * 60_000;
+const BATCH_GET_TIMEOUT_MS = 20 * 60_000;
+// API-Version für den direkten Abruf (gleiche Regel wie beim SDK-Client oben)
+const GEMINI_API_VERSION =
+  { beta: 'v1beta', alpha: 'v1alpha' }[process.env.GOOGLE_GENAI_API_VERSION] ||
+  process.env.GOOGLE_GENAI_API_VERSION ||
+  'v1beta';
 // Erneuter Abruf: so lange wartet die Anfrage, bevor der Abruf im Hintergrund weiterläuft
 // (unter dem Nginx-Timeout von 180 s)
 const REFETCH_WAIT_MS = 120_000;
@@ -73,6 +79,10 @@ const MIME_BY_EXT = {
 
 if (!fs.existsSync(IMAGES_DIR)) fs.mkdirSync(IMAGES_DIR, { recursive: true });
 if (!fs.existsSync(JOBS_FILE)) fs.writeFileSync(JOBS_FILE, JSON.stringify([], null, 2));
+// Reste abgebrochener Batch-Abrufe (z. B. nach einem Neustart mitten im Download) entfernen
+for (const name of fs.readdirSync(IMAGES_DIR)) {
+  if (/^batchtmp_.*\.part$/.test(name)) fs.rmSync(path.join(IMAGES_DIR, name), { force: true });
+}
 
 const readJobs = () => JSON.parse(fs.readFileSync(JOBS_FILE, 'utf-8'));
 const saveJobs = (jobs) => fs.writeFileSync(JOBS_FILE, JSON.stringify(jobs, null, 2));
@@ -219,48 +229,71 @@ app.post('/api/batch/start', async (req, res) => {
 // ---------------------------------------------------------------------------
 // 3. Batch-Status prüfen & fertige Bilder herunterladen
 // ---------------------------------------------------------------------------
-// Übernimmt die Ergebnisse eines fertigen Auftrags in `job` (wird verändert): schreibt
-// die Bilder, die noch nicht vorhanden sind, und merkt sich in job.lastFetch, was
-// Gemini geliefert hat. Liefert true, wenn sich `job` geändert hat.
-const storeBatchResults = (job, remoteJob) => {
-  const inlined = remoteJob.dest?.inlinedResponses;
-  job.images = job.images || [];
-  const present = new Set(job.images.map((i) => batchImageIndex(job.name, i.fileName)));
-  const { found, failures } = extractBatchImages(job.name, inlined, present);
+// Positionen eines Auftrags, zu denen schon ein Bild gespeichert ist
+const presentIndexes = (job) =>
+  new Set((job.images || []).map((i) => batchImageIndex(job.name, i.fileName)));
 
-  for (const { index, fileName, data } of found) {
-    fs.writeFileSync(path.join(IMAGES_DIR, fileName), Buffer.from(data, 'base64'));
+// Übernimmt das Ergebnis von fetchBatchJob für einen fertigen Auftrag in `job` (wird
+// verändert): benennt die temporären Bilddateien um und merkt sich in job.lastFetch,
+// was Gemini geliefert hat.
+const storeBatchResults = (job, fetched) => {
+  job.images = job.images || [];
+  const present = presentIndexes(job);
+  let added = 0;
+
+  for (const { index, path: tmpFile, mimeType } of fetched.found) {
+    // Inzwischen vorhanden (z. B. paralleler Abruf): vorhandenes Bild nicht ersetzen
+    if (present.has(index)) {
+      fs.rmSync(tmpFile, { force: true });
+      continue;
+    }
+    const fileName = batchFileName(job.name, index, mimeType);
+    fs.renameSync(tmpFile, path.join(IMAGES_DIR, fileName));
     job.images.push({
       imageUrl: `images/${fileName}`,
       fileName,
       prompt: job.prompts?.[index] ?? null,
       metadata: null,
     });
+    added += 1;
   }
   // Reihenfolge der Anfragen beibehalten (nachgeladene Bilder nicht ans Ende)
   job.images.sort(
     (a, b) => batchImageIndex(job.name, a.fileName) - batchImageIndex(job.name, b.fileName),
   );
-  for (const { index, reason } of failures) {
+  for (const { index, reason } of fetched.failures) {
     console.error(`Kein Bild für Anfrage ${index} in ${job.name}: ${reason}`);
   }
 
   job.lastFetch = {
     at: new Date().toISOString(),
     // Anzahl der Antworten von Gemini; null = keine Inline-Ergebnisse geliefert
-    responses: Array.isArray(inlined) ? inlined.length : null,
-    added: found.length,
-    failures,
+    responses: fetched.responses,
+    added,
+    failures: fetched.failures,
   };
-  return true;
 };
 
-// Abfragen bei Gemini laufen strikt nacheinander. Bei fertigen Aufträgen enthält die
-// Antwort alle Bilder (bei 4K sehr groß): parallele Abfragen haben den Prozess sonst
-// mit CPU-/Speicherlast blockiert und abstürzen lassen.
+// Temporäre Dateien eines Abrufs entfernen, dessen Ergebnis nicht übernommen wird
+const discardFetched = (fetched) => {
+  for (const { path: tmpFile } of fetched.found) fs.rmSync(tmpFile, { force: true });
+};
+
+// Abfragen bei Gemini laufen strikt nacheinander: die Antwort eines fertigen Auftrags
+// enthält alle Bilder (bei 4K mehrere hundert MB).
 const geminiBatchQueue = createMutex();
-const getRemoteJob = (name) =>
-  client.batches.get({ name, config: { httpOptions: { timeout: BATCH_GET_TIMEOUT_MS } } });
+// Die Antwort wird gestreamt (lib/batch-fetch.js) statt über das SDK gelesen: das SDK
+// lädt sie als einen String und scheitert ab ca. 512 MB.
+const getRemoteJob = (name, skipIndexes) =>
+  fetchBatchJob({
+    name,
+    apiKey: process.env.GEMINI_API_KEY,
+    baseUrl: process.env.GOOGLE_GEMINI_BASE_URL || undefined,
+    apiVersion: GEMINI_API_VERSION,
+    skipIndexes,
+    tmpDir: IMAGES_DIR,
+    timeoutMs: BATCH_GET_TIMEOUT_MS,
+  });
 
 const refreshBatchJobs = createSingleFlight(() =>
   geminiBatchQueue(async () => {
@@ -270,7 +303,8 @@ const refreshBatchJobs = createSingleFlight(() =>
       // Ein fehlerhafter Job darf die Statusabfrage der übrigen nicht blockieren
       let remoteJob;
       try {
-        remoteJob = await getRemoteJob(name);
+        const known = readJobs().find((j) => j.name === name);
+        remoteJob = await getRemoteJob(name, known ? presentIndexes(known) : undefined);
       } catch (error) {
         console.error(`Fehler bei Statusabfrage von ${name}:`, error);
         continue;
@@ -280,15 +314,21 @@ const refreshBatchJobs = createSingleFlight(() =>
       // Bilder gelöscht oder neue Aufträge angelegt worden sein
       const jobs = readJobs();
       const job = jobs.find((j) => j.name === name);
-      if (!job) continue;
+      if (!job) {
+        discardFetched(remoteJob);
+        continue;
+      }
 
       let updated = false;
-      if (remoteJob.state !== job.state) {
+      if (remoteJob.state && remoteJob.state !== job.state) {
         job.state = remoteJob.state;
         updated = true;
       }
       if (remoteJob.state === 'JOB_STATE_SUCCEEDED') {
-        updated = storeBatchResults(job, remoteJob) || updated;
+        storeBatchResults(job, remoteJob);
+        updated = true;
+      } else {
+        discardFetched(remoteJob);
       }
 
       // Nach jedem Auftrag speichern, damit ein späterer Fehler den Fortschritt nicht verwirft
@@ -325,11 +365,16 @@ const refetchRunning = new Map();
 const refetchBatchImages = (name) => {
   if (!refetchRunning.has(name)) {
     const run = geminiBatchQueue(async () => {
-      const remoteJob = await getRemoteJob(name);
+      const known = readJobs().find((j) => j.name === name);
+      const remoteJob = await getRemoteJob(name, known ? presentIndexes(known) : undefined);
       const jobs = readJobs();
       const job = jobs.find((j) => j.name === name);
-      if (!job) return;
+      if (!job) {
+        discardFetched(remoteJob);
+        return;
+      }
       if (remoteJob.state !== 'JOB_STATE_SUCCEEDED') {
+        discardFetched(remoteJob);
         job.lastFetch = {
           at: new Date().toISOString(),
           responses: null,
