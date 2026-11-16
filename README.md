@@ -42,6 +42,7 @@ Auf dem Server installiert `deploy.sh` nur die Laufzeit-Abhängigkeiten (`npm ci
 | POST    | `/api/generate-single`           | Einzelbild sofort erzeugen                                                            |
 | POST    | `/api/batch/start`               | Batch-Job absenden (50 % Rabatt)                                                      |
 | GET     | `/api/batch/status`              | Status prüfen, fertige Bilder herunterladen                                           |
+| POST    | `/api/batch/refetch`             | Fehlende Bilder eines fertigen Batch-Auftrags erneut bei Gemini abrufen (`{ job }`)   |
 | POST    | `/api/adobe-metadata`            | Titel, Keywords und Kategorie zu einem Bild                                           |
 | GET     | `/api/images`                    | Einzelbilder (ohne Batch-Zuordnung) auflisten                                         |
 | GET     | `/api/images/zip`                | Alle Einzelbilder als ZIP                                                             |
