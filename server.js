@@ -21,7 +21,8 @@ import {
   inFolder,
   parseFolder,
 } from './lib/gallery.js';
-import { createSingleFlight, settlesWithin } from './lib/refresh.js';
+import { createMutex, createSingleFlight, settlesWithin } from './lib/refresh.js';
+import { batchImageIndex, extForMime, extractBatchImages, findImagePart } from './lib/batch.js';
 import { MAX_UPLOAD_BYTES, detectImageType, uploadFileName } from './lib/upload.js';
 
 const app = express();
@@ -59,15 +60,16 @@ const TERMINAL_STATES = new Set([
 const STATUS_WAIT_MS = 20_000;
 // Obergrenze für eine einzelne Abfrage bei Gemini (inkl. Download fertiger Bilder)
 const BATCH_GET_TIMEOUT_MS = 5 * 60_000;
+// Erneuter Abruf: so lange wartet die Anfrage, bevor der Abruf im Hintergrund weiterläuft
+// (unter dem Nginx-Timeout von 180 s)
+const REFETCH_WAIT_MS = 120_000;
 
-const EXT_BY_MIME = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
 const MIME_BY_EXT = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
 };
-const extForMime = (mimeType) => EXT_BY_MIME[mimeType] || 'png';
 
 if (!fs.existsSync(IMAGES_DIR)) fs.mkdirSync(IMAGES_DIR, { recursive: true });
 if (!fs.existsSync(JOBS_FILE)) fs.writeFileSync(JOBS_FILE, JSON.stringify([], null, 2));
@@ -93,9 +95,6 @@ const saveSingles = (singles) => fs.writeFileSync(SINGLES_FILE, JSON.stringify(s
 const INLINE_IMAGE_MAX_BYTES = 15 * 1024 * 1024;
 
 const isUploadedSingle = (info) => info?.source === 'upload';
-
-const findImagePart = (response) =>
-  response?.candidates?.[0]?.content?.parts?.find((p) => p.inlineData);
 
 // ---------------------------------------------------------------------------
 // 1. Sofort-Generierung (Einzelbild)
@@ -220,72 +219,83 @@ app.post('/api/batch/start', async (req, res) => {
 // ---------------------------------------------------------------------------
 // 3. Batch-Status prüfen & fertige Bilder herunterladen
 // ---------------------------------------------------------------------------
-// Die Abfrage bei Gemini läuft höchstens einmal gleichzeitig. Bei fertigen Aufträgen
-// enthält die Antwort alle Bilder (bei 4K sehr groß): parallele Abfragen desselben
-// Auftrags haben den Prozess sonst mit CPU-/Speicherlast blockiert und abstürzen lassen.
-const refreshBatchJobs = createSingleFlight(async () => {
-  for (const { name, state } of readJobs()) {
-    if (TERMINAL_STATES.has(state)) continue;
+// Übernimmt die Ergebnisse eines fertigen Auftrags in `job` (wird verändert): schreibt
+// die Bilder, die noch nicht vorhanden sind, und merkt sich in job.lastFetch, was
+// Gemini geliefert hat. Liefert true, wenn sich `job` geändert hat.
+const storeBatchResults = (job, remoteJob) => {
+  const inlined = remoteJob.dest?.inlinedResponses;
+  job.images = job.images || [];
+  const present = new Set(job.images.map((i) => batchImageIndex(job.name, i.fileName)));
+  const { found, failures } = extractBatchImages(job.name, inlined, present);
 
-    // Ein fehlerhafter Job darf die Statusabfrage der übrigen nicht blockieren
-    let remoteJob;
-    try {
-      remoteJob = await client.batches.get({
-        name,
-        config: { httpOptions: { timeout: BATCH_GET_TIMEOUT_MS } },
-      });
-    } catch (error) {
-      console.error(`Fehler bei Statusabfrage von ${name}:`, error);
-      continue;
-    }
-
-    // Datei erst jetzt neu lesen: während der Abfrage können Metadaten gespeichert,
-    // Bilder gelöscht oder neue Aufträge angelegt worden sein
-    const jobs = readJobs();
-    const job = jobs.find((j) => j.name === name);
-    if (!job) continue;
-
-    let updated = false;
-    if (remoteJob.state !== job.state) {
-      job.state = remoteJob.state;
-      updated = true;
-    }
-
-    if (
-      remoteJob.state === 'JOB_STATE_SUCCEEDED' &&
-      remoteJob.dest?.inlinedResponses &&
-      job.images.length === 0
-    ) {
-      // Inline-Antworten tragen keinen Key -> Dateiname aus Job-ID + Position
-      const jobId = job.name.replace(/\W/g, '_');
-      remoteJob.dest.inlinedResponses.forEach((item, index) => {
-        const part = findImagePart(item.response);
-        if (!part) {
-          console.error(
-            `Kein Bild für Anfrage ${index} in ${job.name}:`,
-            item.error ?? 'leere Antwort',
-          );
-          return;
-        }
-        const fileName = `${jobId}_${index}.${extForMime(part.inlineData.mimeType)}`;
-        fs.writeFileSync(
-          path.join(IMAGES_DIR, fileName),
-          Buffer.from(part.inlineData.data, 'base64'),
-        );
-        job.images.push({
-          imageUrl: `images/${fileName}`,
-          fileName,
-          prompt: job.prompts?.[index] ?? null,
-          metadata: null,
-        });
-      });
-      updated = true;
-    }
-
-    // Nach jedem Auftrag speichern, damit ein späterer Fehler den Fortschritt nicht verwirft
-    if (updated) saveJobs(jobs);
+  for (const { index, fileName, data } of found) {
+    fs.writeFileSync(path.join(IMAGES_DIR, fileName), Buffer.from(data, 'base64'));
+    job.images.push({
+      imageUrl: `images/${fileName}`,
+      fileName,
+      prompt: job.prompts?.[index] ?? null,
+      metadata: null,
+    });
   }
-});
+  // Reihenfolge der Anfragen beibehalten (nachgeladene Bilder nicht ans Ende)
+  job.images.sort(
+    (a, b) => batchImageIndex(job.name, a.fileName) - batchImageIndex(job.name, b.fileName),
+  );
+  for (const { index, reason } of failures) {
+    console.error(`Kein Bild für Anfrage ${index} in ${job.name}: ${reason}`);
+  }
+
+  job.lastFetch = {
+    at: new Date().toISOString(),
+    // Anzahl der Antworten von Gemini; null = keine Inline-Ergebnisse geliefert
+    responses: Array.isArray(inlined) ? inlined.length : null,
+    added: found.length,
+    failures,
+  };
+  return true;
+};
+
+// Abfragen bei Gemini laufen strikt nacheinander. Bei fertigen Aufträgen enthält die
+// Antwort alle Bilder (bei 4K sehr groß): parallele Abfragen haben den Prozess sonst
+// mit CPU-/Speicherlast blockiert und abstürzen lassen.
+const geminiBatchQueue = createMutex();
+const getRemoteJob = (name) =>
+  client.batches.get({ name, config: { httpOptions: { timeout: BATCH_GET_TIMEOUT_MS } } });
+
+const refreshBatchJobs = createSingleFlight(() =>
+  geminiBatchQueue(async () => {
+    for (const { name, state } of readJobs()) {
+      if (TERMINAL_STATES.has(state)) continue;
+
+      // Ein fehlerhafter Job darf die Statusabfrage der übrigen nicht blockieren
+      let remoteJob;
+      try {
+        remoteJob = await getRemoteJob(name);
+      } catch (error) {
+        console.error(`Fehler bei Statusabfrage von ${name}:`, error);
+        continue;
+      }
+
+      // Datei erst jetzt neu lesen: während der Abfrage können Metadaten gespeichert,
+      // Bilder gelöscht oder neue Aufträge angelegt worden sein
+      const jobs = readJobs();
+      const job = jobs.find((j) => j.name === name);
+      if (!job) continue;
+
+      let updated = false;
+      if (remoteJob.state !== job.state) {
+        job.state = remoteJob.state;
+        updated = true;
+      }
+      if (remoteJob.state === 'JOB_STATE_SUCCEEDED') {
+        updated = storeBatchResults(job, remoteJob) || updated;
+      }
+
+      // Nach jedem Auftrag speichern, damit ein späterer Fehler den Fortschritt nicht verwirft
+      if (updated) saveJobs(jobs);
+    }
+  }),
+);
 
 app.get('/api/batch/status', async (req, res) => {
   try {
@@ -296,6 +306,80 @@ app.get('/api/batch/status', async (req, res) => {
     res.json(readJobs());
   } catch (error) {
     console.error('Fehler bei Batch-Status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Fehlende Bilder eines fertigen Auftrags erneut bei Gemini abrufen ({ job: 'batches/...' }).
+// Vorhandene Bilder (und ihre Metadaten) bleiben unverändert; ergänzt wird nur, was fehlt,
+// z. B. nach einem abgebrochenen Abruf oder nach dem Löschen.
+// Das SDK liefert Fehler der API als JSON-Text; daraus die eigentliche Meldung lesen
+const apiErrorText = (error) => {
+  try {
+    return JSON.parse(error.message).error.message || error.message;
+  } catch {
+    return error.message;
+  }
+};
+const refetchRunning = new Map();
+const refetchBatchImages = (name) => {
+  if (!refetchRunning.has(name)) {
+    const run = geminiBatchQueue(async () => {
+      const remoteJob = await getRemoteJob(name);
+      const jobs = readJobs();
+      const job = jobs.find((j) => j.name === name);
+      if (!job) return;
+      if (remoteJob.state !== 'JOB_STATE_SUCCEEDED') {
+        job.lastFetch = {
+          at: new Date().toISOString(),
+          responses: null,
+          added: 0,
+          failures: [],
+          note: `Gemini meldet den Status ${remoteJob.state}.`,
+        };
+      } else {
+        storeBatchResults(job, remoteJob);
+      }
+      saveJobs(jobs);
+    })
+      .catch((error) => {
+        console.error(`Fehler beim erneuten Abruf von ${name}:`, error);
+        // Grund am Auftrag festhalten, damit er auch nach einer Hintergrund-Abfrage sichtbar ist
+        const jobs = readJobs();
+        const job = jobs.find((j) => j.name === name);
+        if (job) {
+          job.lastFetch = {
+            at: new Date().toISOString(),
+            responses: null,
+            added: 0,
+            failures: [],
+            note: `Abruf fehlgeschlagen: ${apiErrorText(error)}`,
+          };
+          saveJobs(jobs);
+        }
+      })
+      .finally(() => refetchRunning.delete(name));
+    refetchRunning.set(name, run);
+  }
+  return refetchRunning.get(name);
+};
+
+app.post('/api/batch/refetch', async (req, res) => {
+  try {
+    const name = req.body?.job;
+    if (typeof name !== 'string' || !name) {
+      return res.status(400).json({ error: 'Parameter job fehlt.' });
+    }
+    const job = readJobs().find((j) => j.name === name);
+    if (!job) return res.status(404).json({ error: 'Batch-Auftrag nicht gefunden.' });
+    if (job.state !== 'JOB_STATE_SUCCEEDED') {
+      return res.status(409).json({ error: 'Der Auftrag ist noch nicht erfolgreich beendet.' });
+    }
+
+    const finished = await settlesWithin(refetchBatchImages(name), REFETCH_WAIT_MS);
+    res.json({ pending: !finished, jobs: readJobs() });
+  } catch (error) {
+    console.error('Fehler beim erneuten Abruf:', error);
     res.status(500).json({ error: error.message });
   }
 });

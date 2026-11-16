@@ -210,24 +210,75 @@
           : '<p style="color:#64748b;">Noch keine Batch-Aufträge vorhanden.</p>';
       }
 
+      // Hinweis, warum ein fertiger Auftrag weniger Bilder hat als bestellt
+      function missingImagesHint(job, imageCount) {
+        const fetch = job.lastFetch;
+        const parts = [`${imageCount} von ${job.count} Bildern vorhanden.`];
+        if (fetch?.note) {
+          parts.push(fetch.note);
+        } else if (fetch && fetch.responses === null) {
+          parts.push('Gemini hat beim letzten Abruf keine Ergebnisse mitgeliefert.');
+        } else if (fetch?.failures?.length) {
+          const reasons = [...new Set(fetch.failures.map((f) => f.reason))].slice(0, 3).join('; ');
+          const n = fetch.failures.length;
+          parts.push(`${n} ${n === 1 ? 'Anfrage' : 'Anfragen'} ohne Bild von Gemini: ${reasons}`);
+        } else if (fetch) {
+          parts.push('Die übrigen wurden gelöscht.');
+        }
+        return parts.join(' ');
+      }
+
       function renderJobs() {
         return allJobs
           .map((job) => {
             const imageCount = (job.images || []).length;
+            const incomplete =
+              job.state === 'JOB_STATE_SUCCEEDED' && imageCount < Number(job.count || 0);
             return `
         <div class="job-row">
           <div>
             <strong>${esc(job.name)}</strong> <span class="badge">${esc(job.state)}</span>
             <span style="font-size: 13px; color: #475569;">(${esc(job.count)} Bilder | ${esc(job.imageSize || '2K')} | ${esc(job.aspectRatio || '3:2')})</span>
+            ${
+              incomplete
+                ? `<div class="job-hint" style="font-size: 13px; color: #b45309; margin-top: 4px;">${esc(missingImagesHint(job, imageCount))}</div>`
+                : ''
+            }
           </div>
+          <div class="row" style="margin-bottom: 0; flex-wrap: nowrap;">
+          ${
+            incomplete
+              ? `<button class="secondary refetch-btn" data-job="${esc(job.name)}" onclick="refetchJob(this)">Fehlende Bilder abrufen</button>`
+              : ''
+          }
           ${
             imageCount
               ? `<a class="btn-link" href="galerie.html">${imageCount} Bilder in der Galerie</a>`
               : ''
           }
+          </div>
         </div>`;
           })
           .join('');
+      }
+
+      // Fehlende Bilder eines fertigen Auftrags erneut bei Gemini abrufen
+      async function refetchJob(btn) {
+        const container = document.getElementById('jobsContainer');
+        const jobName = btn.dataset.job;
+        btn.disabled = true;
+        btn.textContent = 'Rufe Bilder ab …';
+        let message;
+        try {
+          const data = await postJson('api/batch/refetch', { job: jobName });
+          allJobs = data.jobs;
+          message = data.pending
+            ? '<p style="color:#b45309;">Der Abruf dauert länger und läuft im Hintergrund weiter. Bitte in ein bis zwei Minuten „Status & Bilder aktualisieren“ klicken.</p>'
+            : '';
+        } catch (err) {
+          message = `<p style="color:#dc2626;">Fehler beim Abrufen der Bilder: ${esc(err.message)}</p>`;
+        }
+        container.innerHTML = message + renderJobs();
       }
 
       renderQueue();
