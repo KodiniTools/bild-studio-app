@@ -228,10 +228,38 @@
         return parts.join(' ');
       }
 
+      // Bereits angeklickte Knöpfe „… Bilder in der Galerie“ (nur in diesem Browser).
+      // Gespeichert wird je Auftrag die Bildanzahl beim Klick: kommen später Bilder dazu
+      // (z. B. „Fehlende Bilder abrufen“), ist der Knopf wieder normal.
+      const SEEN_JOBS_KEY = 'bildStudio.seenJobs';
+
+      function readSeenJobs() {
+        try {
+          const value = JSON.parse(localStorage.getItem(SEEN_JOBS_KEY) || '{}');
+          return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+        } catch {
+          return {};
+        }
+      }
+
+      function markJobSeen(link) {
+        const seen = readSeenJobs();
+        seen[link.dataset.job] = Number(link.dataset.count);
+        try {
+          localStorage.setItem(SEEN_JOBS_KEY, JSON.stringify(seen));
+        } catch {
+          // Speicher gesperrt (z. B. privates Fenster): nur bis zum Neuladen grau
+        }
+        link.classList.add('seen');
+        link.title = 'Bereits angeklickt';
+      }
+
       function renderJobs() {
+        const seen = readSeenJobs();
         return allJobs
           .map((job) => {
             const imageCount = (job.images || []).length;
+            const wasSeen = seen[job.name] === imageCount;
             const incomplete =
               job.state === 'JOB_STATE_SUCCEEDED' && imageCount < Number(job.count || 0);
             return `
@@ -253,7 +281,8 @@
           }
           ${
             imageCount
-              ? `<a class="btn-link" href="galerie.html">${imageCount} Bilder in der Galerie</a>`
+              ? `<a class="btn-link${wasSeen ? ' seen' : ''}" href="galerie.html" data-job="${esc(job.name)}" data-count="${imageCount}"
+                  ${wasSeen ? 'title="Bereits angeklickt"' : ''} onclick="markJobSeen(this)" onauxclick="markJobSeen(this)">${imageCount} Bilder in der Galerie</a>`
               : ''
           }
           </div>
