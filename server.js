@@ -15,9 +15,12 @@ import {
   planBulkExport,
 } from './lib/adobe.js';
 import {
+  CORRECTION,
+  CORRECTION_LABEL,
   UNCATEGORIZED,
   UNCATEGORIZED_LABEL,
   buildGalleryImages,
+  correctionCandidates,
   folderSlug,
   inFolder,
   parseFolder,
@@ -559,6 +562,7 @@ const listSingleImages = () => {
         aspectRatio: info.aspectRatio ?? null,
         metadata: info.metadata ?? null,
         exportExcluded: info.exportExcluded,
+        needsCorrection: info.needsCorrection === true,
       };
     })
     .sort((a, b) => b.createdAt - a.createdAt);
@@ -659,6 +663,7 @@ app.get('/api/gallery', (req, res) => {
       images: buildGalleryImages({ jobs, singles: listSingleImages() }),
       categories: ADOBE_CATEGORIES.map((name, i) => ({ id: i + 1, name })),
       uncategorized: { id: UNCATEGORIZED, name: UNCATEGORIZED_LABEL },
+      correction: { id: CORRECTION, name: CORRECTION_LABEL },
       jobs: jobs.map((j) => ({
         name: j.name,
         state: j.state,
@@ -676,7 +681,7 @@ app.get('/api/gallery', (req, res) => {
   }
 });
 
-// Bilder eines Kategorie-Ordners als ZIP (?category=all|none|1..21), inkl. Adobe-CSV.
+// Bilder eines Kategorie-Ordners als ZIP (?category=all|none|korrektur|1..21), inkl. Adobe-CSV.
 // Flach (ohne Unterordner): Bilder und CSV direkt im ZIP, wie Adobe sie hochladen will.
 app.get('/api/gallery/zip', (req, res) => {
   try {
@@ -722,7 +727,7 @@ app.post('/api/gallery/export', (req, res) => {
     const images = buildGalleryImages({ jobs, singles: listSingleImages() }).filter((img) =>
       inFolder(img, folder),
     );
-    const { change, skippedWarning } = planBulkExport(images, include);
+    const { change, skippedWarning, skippedCorrection } = planBulkExport(images, include);
     const pending = new Set(change);
 
     let jobsChanged = false;
@@ -745,9 +750,88 @@ app.post('/api/gallery/export', (req, res) => {
       }
       saveSingles(singles);
     }
-    res.json({ changed: change, skippedWarning, exportExcluded: !include });
+    res.json({ changed: change, skippedWarning, skippedCorrection, exportExcluded: !include });
   } catch (error) {
     console.error('Fehler bei der Sammel-Markierung:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Legt Bilder in den Korrektur-Ordner bzw. holt sie zurück (Feld needsCorrection in
+ * batch_jobs.json / single_images.json). Beim Hineinlegen wird das Bild zugleich aus
+ * ZIP & CSV genommen (exportExcluded = true); beim Zurückholen bleibt die
+ * Export-Entscheidung, wie sie ist – das Bild wird nach der Korrektur wieder angehakt.
+ * @param {string[]} fileNames sichere Dateinamen
+ * @returns {string[]} Dateinamen, die gefunden und geändert wurden
+ */
+const setNeedsCorrection = (fileNames, needsCorrection) => {
+  const pending = new Set(fileNames);
+  const changed = [];
+  const apply = (record) => {
+    record.needsCorrection = needsCorrection;
+    if (needsCorrection) record.exportExcluded = true;
+  };
+
+  const jobs = readJobs();
+  let jobsChanged = false;
+  for (const img of jobs.flatMap((j) => j.images || [])) {
+    if (!pending.has(img.fileName)) continue;
+    apply(img);
+    pending.delete(img.fileName);
+    changed.push(img.fileName);
+    jobsChanged = true;
+  }
+  if (jobsChanged) saveJobs(jobs);
+
+  const singleNames = [...pending].filter((name) => fs.existsSync(path.join(IMAGES_DIR, name)));
+  if (singleNames.length) {
+    const singles = readSingles();
+    for (const fileName of singleNames) {
+      const record = { ...(singles[fileName] || { prompt: null, metadata: null }) };
+      apply(record);
+      singles[fileName] = record;
+      changed.push(fileName);
+    }
+    saveSingles(singles);
+  }
+  return changed;
+};
+
+// Ein Bild in den Korrektur-Ordner legen oder zurückholen ({ needsCorrection: true|false })
+app.post('/api/images/:fileName/correction', (req, res) => {
+  try {
+    const { fileName } = req.params;
+    const { needsCorrection } = req.body ?? {};
+    if (!isSafeImageName(fileName)) {
+      return res.status(400).json({ error: 'Ungültiger Dateiname.' });
+    }
+    if (typeof needsCorrection !== 'boolean') {
+      return res.status(400).json({ error: 'needsCorrection (true/false) fehlt.' });
+    }
+    if (!setNeedsCorrection([fileName], needsCorrection).length) {
+      return res.status(404).json({ error: 'Bild nicht gefunden.' });
+    }
+    res.json({ fileName, needsCorrection });
+  } catch (error) {
+    console.error('Fehler beim Verschieben in den Korrektur-Ordner:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Alle Bilder mit Prüfhinweis eines Ordners in den Korrektur-Ordner legen ({ category })
+app.post('/api/gallery/correction', (req, res) => {
+  try {
+    const { category } = req.body ?? {};
+    const folder = parseFolder(category === undefined ? undefined : String(category));
+    if (folder === null) return res.status(400).json({ error: 'Ungültige Kategorie.' });
+    const images = readGalleryImages().filter(
+      (img) => inFolder(img, folder) && isSafeImageName(img.fileName),
+    );
+    const changed = setNeedsCorrection(correctionCandidates(images), true);
+    res.json({ changed, needsCorrection: true });
+  } catch (error) {
+    console.error('Fehler beim Verschieben in den Korrektur-Ordner:', error);
     res.status(500).json({ error: error.message });
   }
 });

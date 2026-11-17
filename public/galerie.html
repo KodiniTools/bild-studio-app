@@ -80,6 +80,15 @@
           >
             ☐ Markierung aufheben
           </button>
+          <button
+            id="toCorrectionBtn"
+            type="button"
+            class="mark-tile correction-tile"
+            title="Legt alle Bilder mit Prüfhinweis aus diesem Ordner in den Ordner „Korrektur nötig“. Sie fehlen dann in ZIP & CSV, bis du sie zurückholst und wieder anhakst."
+            onclick="moveWarningsToCorrection()"
+          >
+            ⚠ Prüfhinweise → Korrektur
+          </button>
         </div>
         <a
           id="folderZip"
@@ -105,27 +114,37 @@
 
     <script src="common.js"></script>
     <script>
-      // Stand vom Server: { images, categories, uncategorized, jobs }
-      let gallery = { images: [], categories: [], uncategorized: null, jobs: [] };
+      // Stand vom Server: { images, categories, uncategorized, correction, jobs }
+      let gallery = { images: [], categories: [], uncategorized: null, correction: null, jobs: [] };
+      const correctionLabel = () => gallery.correction?.name || 'Korrektur nötig';
       let loaded = false;
 
-      // Gewählter Ordner steht in der Adresse (#ordner=11 / #ordner=none), bleibt beim
-      // Neuladen erhalten und lässt sich verlinken. Ohne Angabe: alle Bilder.
+      // Gewählter Ordner steht in der Adresse (#ordner=11 / #ordner=none / #ordner=korrektur),
+      // bleibt beim Neuladen erhalten und lässt sich verlinken. Ohne Angabe: alle Bilder.
       function currentFolder() {
-        const match = location.hash.match(/^#ordner=(none|\d{1,2})$/);
+        const match = location.hash.match(/^#ordner=(none|korrektur|\d{1,2})$/);
         if (!match) return 'all';
-        return match[1] === 'none' ? 'none' : Number(match[1]);
+        return match[1] === 'none' || match[1] === 'korrektur' ? match[1] : Number(match[1]);
       }
 
+      // Gleiche Regel wie im Backend (lib/gallery.js inFolder): Bilder im Korrektur-Ordner
+      // stehen nur dort und unter „Alle“, nicht in ihrem Kategorie-Ordner
       function inFolder(img, folder) {
         if (folder === 'all') return true;
+        if (folder === 'korrektur') return img.needsCorrection === true;
+        if (img.needsCorrection === true) return false;
         if (folder === 'none') return img.categoryId === null;
         return img.categoryId === folder;
       }
 
+      // Ordner-Schlüssel, in dem ein Bild liegt (für Zähler und Hinweise)
+      const folderOf = (img) =>
+        img.needsCorrection === true ? 'korrektur' : (img.categoryId ?? 'none');
+
       function folderName(folder) {
         if (folder === 'all') return 'Alle Bilder';
         if (folder === 'none') return gallery.uncategorized?.name || 'Ohne Kategorie';
+        if (folder === 'korrektur') return correctionLabel();
         const cat = gallery.categories.find((c) => c.id === folder);
         return cat ? `${cat.name} (Adobe-Nr. ${cat.id})` : `Kategorie ${folder}`;
       }
@@ -135,6 +154,7 @@
       function folderSlug(folder) {
         if (folder === 'all') return 'alle';
         if (folder === 'none') return 'ohne_kategorie';
+        if (folder === 'korrektur') return 'korrektur';
         const cat = gallery.categories.find((c) => c.id === folder);
         return `${String(folder).padStart(2, '0')}_${String(cat?.name ?? '').replace(/\W/g, '_')}`;
       }
@@ -167,7 +187,7 @@
         const folder = currentFolder();
         const counts = new Map();
         for (const img of gallery.images) {
-          const key = img.categoryId ?? 'none';
+          const key = folderOf(img);
           counts.set(key, (counts.get(key) || 0) + 1);
         }
         // Ein Ordner erscheint, sobald er Bilder enthält (oder gerade gewählt ist)
@@ -184,14 +204,21 @@
             count: counts.get('none') || 0,
           });
         }
+        if (counts.has('korrektur') || folder === 'korrektur') {
+          tiles.push({
+            key: 'korrektur',
+            label: correctionLabel(),
+            count: counts.get('korrektur') || 0,
+          });
+        }
         document.getElementById('folders').innerHTML = tiles
           .map(
             (t) => `
           <button type="button"
-            class="folder${t.key === folder ? ' active' : ''}${t.key === 'none' ? ' uncategorized' : ''}"
-            title="${typeof t.key === 'number' ? `Adobe-Nr. ${t.key}` : ''}"
+            class="folder${t.key === folder ? ' active' : ''}${t.key === 'none' ? ' uncategorized' : ''}${t.key === 'korrektur' ? ' correction' : ''}"
+            title="${typeof t.key === 'number' ? `Adobe-Nr. ${t.key}` : t.key === 'korrektur' ? 'Bilder, die manuell korrigiert werden müssen (nicht in ZIP & CSV)' : ''}"
             onclick="openFolder('${t.key}')">
-            <span>📁 ${esc(t.label)}</span><span class="count">${t.count}</span>
+            <span>${t.key === 'korrektur' ? '🛠' : '📁'} ${esc(t.label)}</span><span class="count">${t.count}</span>
           </button>`,
           )
           .join('');
@@ -241,7 +268,10 @@
       // die sich durch einen Klick ändern würden.
       function updateMarkButtons(images) {
         const toMark = images.filter(
-          (img) => isExcluded(img) && !hasWarning(img.metadata?.complianceWarning),
+          (img) =>
+            isExcluded(img) &&
+            img.needsCorrection !== true &&
+            !hasWarning(img.metadata?.complianceWarning),
         ).length;
         const toUnmark = images.filter((img) => !isExcluded(img)).length;
         document.getElementById('markActions').style.display =
@@ -252,6 +282,104 @@
         const unmarkBtn = document.getElementById('unmarkAllBtn');
         unmarkBtn.textContent = `☐ Markierung aufheben${toUnmark ? ` (${toUnmark})` : ''}`;
         unmarkBtn.disabled = markBusy || !toUnmark;
+        // Gleiche Auswahl wie lib/gallery.js correctionCandidates
+        const toCorrection = images.filter(
+          (img) => img.needsCorrection !== true && hasWarning(img.metadata?.complianceWarning),
+        ).length;
+        const corrBtn = document.getElementById('toCorrectionBtn');
+        corrBtn.textContent = `⚠ Prüfhinweise → Korrektur (${toCorrection})`;
+        corrBtn.style.display = toCorrection ? '' : 'none';
+        corrBtn.disabled = markBusy;
+      }
+
+      const cardOf = (fileName) =>
+        [...document.querySelectorAll('#grid .img-card')].find((c) => c.dataset.file === fileName);
+
+      /**
+       * Karte nach Verschieben in den/aus dem Korrektur-Ordner: passt sie nicht mehr in den
+       * angezeigten Ordner, verschwindet sie (das Bild ist „verschoben“); sonst werden
+       * Export-Schalter und Knopf aktualisiert.
+       */
+      function refreshCorrectionCard(img) {
+        const card = cardOf(img.fileName);
+        if (!card) return;
+        if (!inFolder(img, currentFolder())) {
+          card.remove();
+          return;
+        }
+        card.classList.toggle('excluded', isExcluded(img));
+        card.querySelector('.export-box').innerHTML = renderExportToggle(img);
+        card.querySelector('.correction-box').innerHTML = renderCorrectionButton(img);
+      }
+
+      function afterCorrectionChange() {
+        renderFolders();
+        renderExports();
+        // Leerer Ordner: Hinweis statt leerer Fläche
+        if (updateFolderHeader() === 0) renderGrid();
+      }
+
+      function renderCorrectionButton(img) {
+        return img.needsCorrection === true
+          ? `<button type="button" class="secondary correction-btn" onclick="toggleCorrection(this, false)"
+               title="Holt das Bild zurück in seinen Kategorie-Ordner. Danach wieder anhaken, damit es in ZIP & CSV kommt.">
+               ↩ Zurück aus „${esc(correctionLabel())}“</button>`
+          : `<button type="button" class="secondary correction-btn" onclick="toggleCorrection(this, true)"
+               title="Legt das Bild in den Ordner „${esc(correctionLabel())}“ und nimmt es aus ZIP & CSV.">
+               🛠 In „${esc(correctionLabel())}“ verschieben</button>`;
+      }
+
+      async function toggleCorrection(btn, needsCorrection) {
+        const img = imageOf(btn);
+        if (!img) return;
+        btn.disabled = true;
+        try {
+          await postJson(`api/images/${encodeURIComponent(img.fileName)}/correction`, {
+            needsCorrection,
+          });
+          img.needsCorrection = needsCorrection;
+          if (needsCorrection) img.exportExcluded = true;
+          refreshCorrectionCard(img);
+          afterCorrectionChange();
+          setStatus(
+            needsCorrection
+              ? `„${img.fileName}“ liegt jetzt in „${correctionLabel()}“ und ist nicht in ZIP & CSV.`
+              : `„${img.fileName}“ ist zurück im Ordner „${folderName(folderOf(img))}“. Zum Exportieren wieder anhaken.`,
+          );
+        } catch (err) {
+          btn.disabled = false;
+          setStatus('Fehler beim Verschieben: ' + err.message);
+        }
+      }
+
+      // Alle Bilder mit Prüfhinweis des angezeigten Ordners in den Korrektur-Ordner legen
+      async function moveWarningsToCorrection() {
+        if (markBusy || !loaded) return;
+        markBusy = true;
+        updateFolderHeader();
+        try {
+          const result = await postJson('api/gallery/correction', {
+            category: String(currentFolder()),
+          });
+          const changed = new Set(result.changed);
+          for (const img of gallery.images) {
+            if (!changed.has(img.fileName)) continue;
+            img.needsCorrection = true;
+            img.exportExcluded = true;
+            refreshCorrectionCard(img);
+          }
+          const n = result.changed.length;
+          setStatus(
+            n
+              ? `${n} ${n === 1 ? 'Bild' : 'Bilder'} mit Prüfhinweis nach „${correctionLabel()}“ verschoben.`
+              : 'Kein Bild mit Prüfhinweis zu verschieben.',
+          );
+        } catch (err) {
+          setStatus('Fehler beim Verschieben: ' + err.message);
+        } finally {
+          markBusy = false;
+          afterCorrectionChange();
+        }
       }
 
       /**
@@ -285,11 +413,15 @@
           const n = result.changed.length;
           const bilder = (k) => `${k} ${k === 1 ? 'Bild' : 'Bilder'}`;
           const skipped = result.skippedWarning.length;
+          const skippedCorr = result.skippedCorrection?.length ?? 0;
           if (include) {
             setStatus(
               (n ? `${bilder(n)} für ZIP & CSV markiert.` : 'Keine weiteren Bilder zu markieren.') +
                 (skipped
                   ? ` ${bilder(skipped)} mit Prüfhinweis nicht markiert – bitte einzeln prüfen und anhaken.`
+                  : '') +
+                (skippedCorr
+                  ? ` ${bilder(skippedCorr)} in „${correctionLabel()}“ nicht markiert.`
                   : ''),
             );
           } else {
@@ -447,6 +579,7 @@
             ${img.metadata ? formatMetaHtml(img.metadata, img.categoryId) : ''}
           </div>
           <div class="export-box">${renderExportToggle(img)}</div>
+          <div class="correction-box">${renderCorrectionButton(img)}</div>
           <div class="card-actions">
             <a class="btn-link" href="api/images/${encodeURIComponent(img.fileName)}/download" download="${esc(img.fileName)}">
               Herunterladen

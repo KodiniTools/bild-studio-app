@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CORRECTION,
   UNCATEGORIZED,
   buildGalleryImages,
+  correctionCandidates,
   folderDirName,
   folderSlug,
   imageCategoryId,
@@ -146,4 +148,41 @@ test('buildGalleryImages: hochgeladene Bilder behalten Quelle und Originalnamen'
   assert.equal(up.jobName, null);
   assert.equal(single.source, 'single');
   assert.equal(single.originalName, null);
+});
+
+test('Korrektur-Ordner: Bild nur dort und unter „Alle“, nicht im Kategorie-Ordner', () => {
+  assert.equal(parseFolder('korrektur'), CORRECTION);
+  assert.equal(folderSlug(CORRECTION), 'korrektur');
+  const moved = { categoryId: 3, needsCorrection: true };
+  const movedNone = { categoryId: null, needsCorrection: true };
+  const normal = { categoryId: 3, needsCorrection: false };
+  assert.ok(inFolder(moved, 'all') && inFolder(moved, CORRECTION));
+  assert.ok(!inFolder(moved, 3) && !inFolder(movedNone, 'none'));
+  assert.ok(inFolder(normal, 3) && !inFolder(normal, CORRECTION));
+  // Alte Einträge ohne Feld verhalten sich wie bisher
+  assert.ok(inFolder({ categoryId: 3 }, 3) && !inFolder({ categoryId: 3 }, CORRECTION));
+
+  const [a, b] = buildGalleryImages({
+    singles: [
+      { fileName: 'a.jpg', imageUrl: 'images/a.jpg', createdAt: 2, needsCorrection: true },
+      { fileName: 'b.jpg', imageUrl: 'images/b.jpg', createdAt: 1 },
+    ],
+  });
+  assert.equal(a.needsCorrection, true);
+  assert.equal(b.needsCorrection, false);
+});
+
+test('correctionCandidates: nur Prüfhinweise, die noch nicht im Korrektur-Ordner sind', () => {
+  const warn = { complianceWarning: 'Logo visible' };
+  assert.deepEqual(
+    correctionCandidates([
+      { fileName: 'w.jpg', metadata: warn },
+      { fileName: 'w.jpg', metadata: warn },
+      { fileName: 'k.jpg', metadata: warn, needsCorrection: true },
+      { fileName: 'n.jpg', metadata: { complianceWarning: 'None' } },
+      { fileName: 'o.jpg', metadata: null },
+    ]),
+    ['w.jpg'],
+  );
+  assert.deepEqual(correctionCandidates(undefined), []);
 });

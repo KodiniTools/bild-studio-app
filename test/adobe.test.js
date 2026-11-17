@@ -173,6 +173,7 @@ test('Sammel-Markierung: Alle markieren lässt Bilder mit Prüfhinweis aus', () 
   assert.deepEqual(planBulkExport(images, true), {
     change: ['a.jpg'],
     skippedWarning: ['c.jpg', 'd.jpg'],
+    skippedCorrection: [],
   });
 });
 
@@ -187,6 +188,25 @@ test('Sammel-Markierung: Markierung aufheben schließt alle aktuell aufgenommene
   assert.deepEqual(planBulkExport(images, false), {
     change: ['b.jpg', 'e.jpg'],
     skippedWarning: [],
+    skippedCorrection: [],
   });
-  assert.deepEqual(planBulkExport(undefined, true), { change: [], skippedWarning: [] });
+  assert.deepEqual(planBulkExport(undefined, true), {
+    change: [],
+    skippedWarning: [],
+    skippedCorrection: [],
+  });
+});
+
+test('Sammel-Markierung: Bilder im Korrektur-Ordner bleiben ausgeschlossen', () => {
+  const images = [
+    { fileName: 'k.jpg', metadata: null, exportExcluded: true, needsCorrection: true },
+    { fileName: 'i.jpg', metadata: null, exportExcluded: false, needsCorrection: true },
+  ];
+  assert.deepEqual(planBulkExport(images, true), {
+    change: [],
+    skippedWarning: [],
+    skippedCorrection: ['k.jpg'],
+  });
+  // Aufheben wirkt auch im Korrektur-Ordner
+  assert.deepEqual(planBulkExport(images, false).change, ['i.jpg']);
 });
