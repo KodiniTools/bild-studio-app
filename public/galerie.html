@@ -137,6 +137,32 @@
         return img.categoryId === folder;
       }
 
+      // Ansicht eines einzelnen Batch-Auftrags (#auftrag=<Name>, z. B. vom Knopf
+      // „N Bilder in der Galerie“ auf der Startseite). Dann gilt kein Ordner.
+      function currentJob() {
+        const match = location.hash.match(/^#auftrag=(.+)$/);
+        if (!match) return null;
+        try {
+          return decodeURIComponent(match[1]);
+        } catch {
+          return null;
+        }
+      }
+
+      // Steht das Bild in der aktuellen Ansicht (Auftrag oder Ordner)?
+      function inView(img) {
+        const job = currentJob();
+        return job !== null ? img.jobName === job : inFolder(img, currentFolder());
+      }
+
+      // Eindeutiger Schlüssel der Ansicht (Neuzeichnen/Scrollposition)
+      const viewKey = () =>
+        currentJob() !== null ? `job:${currentJob()}` : String(currentFolder());
+
+      // Auftrag bzw. Ordner für Sammel-Aktionen am Server
+      const viewScope = () =>
+        currentJob() !== null ? { job: currentJob() } : { category: String(currentFolder()) };
+
       // Ordner-Schlüssel, in dem ein Bild liegt (für Zähler und Hinweise)
       const folderOf = (img) =>
         img.needsCorrection === true ? 'korrektur' : (img.categoryId ?? 'none');
@@ -184,7 +210,8 @@
       }
 
       function renderFolders() {
-        const folder = currentFolder();
+        // In der Auftragsansicht ist kein Ordner gewählt
+        const folder = currentJob() !== null ? null : currentFolder();
         const counts = new Map();
         for (const img of gallery.images) {
           const key = folderOf(img);
@@ -241,20 +268,31 @@
       // CSV; der Knopf nennt die Anzahl, damit nichts stillschweigend fehlt.
       function updateFolderHeader() {
         const folder = currentFolder();
-        const images = gallery.images.filter((img) => inFolder(img, folder));
+        const job = currentJob();
+        const images = gallery.images.filter(inView);
         const count = images.length;
         const exportable = images.filter((img) => !isExcluded(img)).length;
+        const viewName = job !== null ? `Auftrag ${job}` : folderName(folder);
         document.getElementById('folderTitle').textContent = loaded
-          ? `${folderName(folder)} – ${count} ${count === 1 ? 'Bild' : 'Bilder'}`
+          ? `${viewName} – ${count} ${count === 1 ? 'Bild' : 'Bilder'}`
           : 'Galerie';
         const zip = document.getElementById('folderZip');
-        zip.href = `api/gallery/zip?category=${folder}`;
-        zip.download = `bild-studio_galerie_${folderSlug(folder)}_${today()}.zip`;
+        // Auftrag: gleiches ZIP wie unter „Downloads nach Auftrag“ (inkl. CSV des Auftrags)
+        zip.href =
+          job !== null
+            ? `api/batch/zip?job=${encodeURIComponent(job)}`
+            : `api/gallery/zip?category=${folder}`;
+        zip.download =
+          job !== null
+            ? `bild-studio_${job.replace(/\W/g, '_')}.zip`
+            : `bild-studio_galerie_${folderSlug(folder)}_${today()}.zip`;
         const excludedText = count > exportable ? `, ${count - exportable} ausgeschlossen` : '';
         zip.textContent =
-          folder === 'all'
-            ? `Alle als ZIP (${exportable} Bilder inkl. CSV${excludedText})`
-            : `Ordner als ZIP (${exportable} Bilder inkl. CSV${excludedText})`;
+          job !== null
+            ? `Auftrag als ZIP (${exportable} Bilder inkl. CSV${excludedText})`
+            : folder === 'all'
+              ? `Alle als ZIP (${exportable} Bilder inkl. CSV${excludedText})`
+              : `Ordner als ZIP (${exportable} Bilder inkl. CSV${excludedText})`;
         zip.style.display = loaded && exportable ? '' : 'none';
         updateMarkButtons(images);
         return count;
@@ -303,7 +341,7 @@
       function refreshCorrectionCard(img) {
         const card = cardOf(img.fileName);
         if (!card) return;
-        if (!inFolder(img, currentFolder())) {
+        if (!inView(img)) {
           card.remove();
           return;
         }
@@ -358,9 +396,7 @@
         markBusy = true;
         updateFolderHeader();
         try {
-          const result = await postJson('api/gallery/correction', {
-            category: String(currentFolder()),
-          });
+          const result = await postJson('api/gallery/correction', viewScope());
           const changed = new Set(result.changed);
           for (const img of gallery.images) {
             if (!changed.has(img.fileName)) continue;
@@ -390,14 +426,10 @@
        */
       async function bulkMark(include) {
         if (markBusy || !loaded) return;
-        const folder = currentFolder();
         markBusy = true;
         updateFolderHeader();
         try {
-          const result = await postJson('api/gallery/export', {
-            category: String(folder),
-            include,
-          });
+          const result = await postJson('api/gallery/export', { ...viewScope(), include });
           const changed = new Set(result.changed);
           for (const img of gallery.images) {
             if (!changed.has(img.fileName)) continue;
@@ -461,15 +493,15 @@
         c.total > c.exportable ? `, ${c.total - c.exportable} ausgeschlossen` : '';
 
       function renderGrid() {
-        const folder = currentFolder();
-        const images = gallery.images.filter((img) => inFolder(img, folder));
+        const images = gallery.images.filter(inView);
         // Beim Ordnerwechsel oben anfangen; beim Neuzeichnen desselben Ordners Position halten
-        if (folder !== renderedFolder) document.getElementById('gridScroll').scrollTop = 0;
-        renderedFolder = folder;
+        const key = viewKey();
+        if (key !== renderedFolder) document.getElementById('gridScroll').scrollTop = 0;
+        renderedFolder = key;
         updateFolderHeader();
         document.getElementById('grid').innerHTML = images.length
           ? images.map(renderImageCard).join('')
-          : `<p style="color:#64748b;">${loaded ? 'Keine Bilder in diesem Ordner.' : 'Lade Galerie ...'}</p>`;
+          : `<p style="color:#64748b;">${loaded ? (currentJob() !== null ? 'Keine Bilder zu diesem Auftrag in der Galerie.' : 'Keine Bilder in diesem Ordner.') : 'Lade Galerie ...'}</p>`;
       }
 
       function renderExports() {
@@ -683,7 +715,7 @@
           // stehen, damit sie nicht unter dem Mauszeiger verschwindet
           renderFolders();
           refreshExportState(card, img);
-          if (!inFolder(img, currentFolder())) {
+          if (!inView(img)) {
             const target = img.categoryId ?? 'none';
             box.insertAdjacentHTML(
               'beforeend',
@@ -911,7 +943,7 @@
       // Ordnerwechsel per Klick, Zurück-Taste oder geänderter Adresse
       let renderedFolder = null;
       const onFolderChange = () => {
-        if (loaded && currentFolder() !== renderedFolder) render();
+        if (loaded && viewKey() !== renderedFolder) render();
       };
       window.addEventListener('hashchange', onFolderChange);
       window.addEventListener('popstate', onFolderChange);
