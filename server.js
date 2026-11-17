@@ -12,6 +12,7 @@ import {
   categoryName,
   csvFileName,
   isExportExcluded,
+  planBulkExport,
 } from './lib/adobe.js';
 import {
   UNCATEGORIZED,
@@ -700,6 +701,53 @@ app.get('/api/gallery/zip', (req, res) => {
     );
   } catch (error) {
     console.error('Fehler beim Galerie-ZIP:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Sammel-Markierung eines Ordners ({ category: 'all'|'none'|'1'..'21', include: true|false }):
+// setzt „In ZIP & CSV für Adobe aufnehmen“ für alle Bilder des Ordners bzw. hebt es auf.
+// Gleiche Bildauswahl wie das Ordner-ZIP. Bilder mit Prüfhinweis werden beim Aufnehmen
+// übersprungen (planBulkExport) und müssen einzeln angehakt werden.
+app.post('/api/gallery/export', (req, res) => {
+  try {
+    const { category, include } = req.body ?? {};
+    const folder = parseFolder(category === undefined ? undefined : String(category));
+    if (folder === null) return res.status(400).json({ error: 'Ungültige Kategorie.' });
+    if (typeof include !== 'boolean') {
+      return res.status(400).json({ error: 'include (true/false) fehlt.' });
+    }
+
+    const jobs = readJobs();
+    const images = buildGalleryImages({ jobs, singles: listSingleImages() }).filter((img) =>
+      inFolder(img, folder),
+    );
+    const { change, skippedWarning } = planBulkExport(images, include);
+    const pending = new Set(change);
+
+    let jobsChanged = false;
+    for (const img of jobs.flatMap((j) => j.images || [])) {
+      if (!pending.has(img.fileName)) continue;
+      img.exportExcluded = !include;
+      pending.delete(img.fileName);
+      jobsChanged = true;
+    }
+    if (jobsChanged) saveJobs(jobs);
+
+    // Übrige Namen sind Einzelbilder/Uploads (listSingleImages liefert nur vorhandene Dateien)
+    if (pending.size) {
+      const singles = readSingles();
+      for (const fileName of pending) {
+        singles[fileName] = {
+          ...(singles[fileName] || { prompt: null, metadata: null }),
+          exportExcluded: !include,
+        };
+      }
+      saveSingles(singles);
+    }
+    res.json({ changed: change, skippedWarning, exportExcluded: !include });
+  } catch (error) {
+    console.error('Fehler bei der Sammel-Markierung:', error);
     res.status(500).json({ error: error.message });
   }
 });
