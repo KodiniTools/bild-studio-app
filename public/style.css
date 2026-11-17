@@ -360,3 +360,8 @@ textarea#promptInput {
   margin-top: 8px;
   font-size: 13px;
 }
+
+/* Studio: bereits angeklickter Knopf „… Bilder in der Galerie“ */
+a.btn-link.seen {
+  background: #94a3b8;
+}
