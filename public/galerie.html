@@ -112,6 +112,49 @@
       <div id="exports"></div>
     </div>
 
+    <!-- Großansicht (Bildergalerie): blättert durch die Bilder der angezeigten Ansicht -->
+    <div
+      id="lightbox"
+      class="lightbox"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Bild-Großansicht"
+      hidden
+      onclick="if (event.target === this) closeLightbox();"
+    >
+      <button
+        type="button"
+        class="lightbox-close"
+        aria-label="Schließen"
+        title="Schließen (Esc)"
+        onclick="closeLightbox()"
+      >
+        ✕
+      </button>
+      <button
+        type="button"
+        id="lightboxPrev"
+        class="lightbox-nav lightbox-prev"
+        aria-label="Vorheriges Bild"
+        title="Vorheriges Bild (←)"
+        onclick="stepLightbox(-1)"
+      >
+        ‹
+      </button>
+      <img id="lightboxImg" class="lightbox-img" alt="" />
+      <button
+        type="button"
+        id="lightboxNext"
+        class="lightbox-nav lightbox-next"
+        aria-label="Nächstes Bild"
+        title="Nächstes Bild (→)"
+        onclick="stepLightbox(1)"
+      >
+        ›
+      </button>
+      <div id="lightboxCaption" class="lightbox-caption"></div>
+    </div>
+
     <script src="common.js"></script>
     <script>
       // Stand vom Server: { images, categories, uncategorized, correction, jobs }
@@ -600,7 +643,7 @@
               : 'Sofort erstellt';
         return `
         <div class="img-card${isExcluded(img) ? ' excluded' : ''}" data-file="${esc(img.fileName)}">
-          <a href="${src}" target="_blank"><img src="${src}" alt="${esc(img.fileName)}" loading="lazy" decoding="async" /></a>
+          <a href="${src}" target="_blank" title="Groß ansehen und blättern" onclick="openLightbox(event, this)"><img src="${src}" alt="${esc(img.fileName)}" loading="lazy" decoding="async" /></a>
           <div style="font-size: 11px; color: #64748b;">${esc(img.fileName)}</div>
           <div class="img-source">${source}</div>
           ${renderPromptBox(img.prompt)}
@@ -728,6 +771,91 @@
           btn.disabled = false;
         }
       }
+
+      // --- Großansicht (Bildergalerie) --------------------------------------------------
+      // Blättert durch genau die Karten, die gerade angezeigt werden (Ordner, „Korrektur
+      // nötig“ oder Auftrag), in derselben Reihenfolge. Die Liste wird beim Öffnen aus
+      // dem Raster gelesen.
+      let lightboxFiles = [];
+      let lightboxIndex = -1;
+      let lightboxReturnFocus = null;
+
+      const imageSrc = (img) => String(img.imageUrl).replace(/^\//, '');
+
+      function openLightbox(event, link) {
+        // Strg/Umschalt/Mittelklick: wie bisher im neuen Tab öffnen
+        if (
+          event.ctrlKey ||
+          event.metaKey ||
+          event.shiftKey ||
+          event.altKey ||
+          event.button !== 0
+        ) {
+          return;
+        }
+        const files = [...document.querySelectorAll('#grid .img-card')].map((c) => c.dataset.file);
+        const index = files.indexOf(link.closest('.img-card').dataset.file);
+        if (index < 0) return;
+        event.preventDefault();
+        lightboxFiles = files;
+        lightboxReturnFocus = link;
+        document.getElementById('lightbox').hidden = false;
+        document.body.classList.add('lightbox-open');
+        showLightboxImage(index);
+        document.getElementById('lightbox').querySelector('.lightbox-close').focus();
+      }
+
+      function showLightboxImage(index) {
+        const count = lightboxFiles.length;
+        lightboxIndex = ((index % count) + count) % count; // am Ende wieder von vorn
+        const fileName = lightboxFiles[lightboxIndex];
+        const img = gallery.images.find((i) => i.fileName === fileName);
+        if (!img) return closeLightbox();
+        const el = document.getElementById('lightboxImg');
+        el.src = imageSrc(img);
+        el.alt = img.metadata?.title || fileName;
+        document.getElementById('lightboxCaption').textContent =
+          `${lightboxIndex + 1} / ${count} · ${img.metadata?.title ? `${img.metadata.title} · ` : ''}${fileName}`;
+        const single = count < 2;
+        document.getElementById('lightboxPrev').hidden = single;
+        document.getElementById('lightboxNext').hidden = single;
+        // Nachbarbilder vorladen, damit das Blättern nicht wartet
+        for (const step of [1, -1]) {
+          const next = gallery.images.find(
+            (i) => i.fileName === lightboxFiles[(lightboxIndex + step + count) % count],
+          );
+          if (next && !single) new Image().src = imageSrc(next);
+        }
+      }
+
+      function stepLightbox(step) {
+        if (lightboxIndex >= 0) showLightboxImage(lightboxIndex + step);
+      }
+
+      function closeLightbox() {
+        if (lightboxIndex < 0) return;
+        const fileName = lightboxFiles[lightboxIndex];
+        lightboxIndex = -1;
+        lightboxFiles = [];
+        document.getElementById('lightbox').hidden = true;
+        document.getElementById('lightboxImg').removeAttribute('src');
+        document.body.classList.remove('lightbox-open');
+        // Zuletzt gezeigtes Bild im Raster sichtbar machen
+        const card = cardOf(fileName);
+        const link = card?.querySelector('a') || lightboxReturnFocus;
+        card?.scrollIntoView({ block: 'nearest' });
+        link?.focus({ preventScroll: true });
+        lightboxReturnFocus = null;
+      }
+
+      document.addEventListener('keydown', (event) => {
+        if (lightboxIndex < 0) return;
+        if (event.key === 'Escape') closeLightbox();
+        else if (event.key === 'ArrowLeft') stepLightbox(-1);
+        else if (event.key === 'ArrowRight') stepLightbox(1);
+        else return;
+        event.preventDefault();
+      });
 
       async function deleteImage(btn) {
         const img = imageOf(btn);
