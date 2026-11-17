@@ -710,23 +710,44 @@ app.get('/api/gallery/zip', (req, res) => {
   }
 });
 
-// Sammel-Markierung eines Ordners ({ category: 'all'|'none'|'1'..'21', include: true|false }):
+/**
+ * Bildauswahl für Sammel-Aktionen der Galerie: { job } = Bilder eines Batch-Auftrags,
+ * sonst { category } = Ordner (all|none|korrektur|1..21). Sendet bei ungültiger Angabe
+ * selbst die Antwort und liefert null.
+ * @returns {((img: object) => boolean) | null}
+ */
+const galleryScope = (body, res) => {
+  const { category, job } = body ?? {};
+  if (job !== undefined) {
+    if (typeof job !== 'string' || !job) {
+      res.status(400).json({ error: 'Ungültiger Auftrag.' });
+      return null;
+    }
+    return (img) => img.jobName === job;
+  }
+  const folder = parseFolder(category === undefined ? undefined : String(category));
+  if (folder === null) {
+    res.status(400).json({ error: 'Ungültige Kategorie.' });
+    return null;
+  }
+  return (img) => inFolder(img, folder);
+};
+
+// Sammel-Markierung eines Ordners oder Auftrags ({ category | job, include: true|false }):
 // setzt „In ZIP & CSV für Adobe aufnehmen“ für alle Bilder des Ordners bzw. hebt es auf.
 // Gleiche Bildauswahl wie das Ordner-ZIP. Bilder mit Prüfhinweis werden beim Aufnehmen
 // übersprungen (planBulkExport) und müssen einzeln angehakt werden.
 app.post('/api/gallery/export', (req, res) => {
   try {
-    const { category, include } = req.body ?? {};
-    const folder = parseFolder(category === undefined ? undefined : String(category));
-    if (folder === null) return res.status(400).json({ error: 'Ungültige Kategorie.' });
+    const { include } = req.body ?? {};
+    const inScope = galleryScope(req.body, res);
+    if (!inScope) return;
     if (typeof include !== 'boolean') {
       return res.status(400).json({ error: 'include (true/false) fehlt.' });
     }
 
     const jobs = readJobs();
-    const images = buildGalleryImages({ jobs, singles: listSingleImages() }).filter((img) =>
-      inFolder(img, folder),
-    );
+    const images = buildGalleryImages({ jobs, singles: listSingleImages() }).filter(inScope);
     const { change, skippedWarning, skippedCorrection } = planBulkExport(images, include);
     const pending = new Set(change);
 
@@ -819,14 +840,13 @@ app.post('/api/images/:fileName/correction', (req, res) => {
   }
 });
 
-// Alle Bilder mit Prüfhinweis eines Ordners in den Korrektur-Ordner legen ({ category })
+// Alle Bilder mit Prüfhinweis eines Ordners oder Auftrags in den Korrektur-Ordner legen ({ category | job })
 app.post('/api/gallery/correction', (req, res) => {
   try {
-    const { category } = req.body ?? {};
-    const folder = parseFolder(category === undefined ? undefined : String(category));
-    if (folder === null) return res.status(400).json({ error: 'Ungültige Kategorie.' });
+    const inScope = galleryScope(req.body, res);
+    if (!inScope) return;
     const images = readGalleryImages().filter(
-      (img) => inFolder(img, folder) && isSafeImageName(img.fileName),
+      (img) => inScope(img) && isSafeImageName(img.fileName),
     );
     const changed = setNeedsCorrection(correctionCandidates(images), true);
     res.json({ changed, needsCorrection: true });

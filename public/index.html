@@ -281,7 +281,7 @@
           }
           ${
             imageCount
-              ? `<a class="btn-link${wasSeen ? ' seen' : ''}" href="galerie.html" data-job="${esc(job.name)}" data-count="${imageCount}"
+              ? `<a class="btn-link${wasSeen ? ' seen' : ''}" href="galerie.html#auftrag=${esc(encodeURIComponent(job.name))}" data-job="${esc(job.name)}" data-count="${imageCount}"
                   ${wasSeen ? 'title="Bereits angeklickt"' : ''} onclick="markJobSeen(this)" onauxclick="markJobSeen(this)">${imageCount} Bilder in der Galerie</a>`
               : ''
           }
