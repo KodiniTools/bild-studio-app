@@ -58,9 +58,36 @@
 
     <!-- Inhalt des gewählten Ordners -->
     <div class="card">
-      <div class="row" style="justify-content: space-between; align-items: center">
+      <div class="row" style="align-items: center">
         <h3 id="folderTitle" style="margin: 0">Alle Bilder</h3>
-        <a id="folderZip" class="btn-link" href="api/gallery/zip?category=all" download>
+        <!-- Sammel-Markierung: Schalter „In ZIP & CSV für Adobe aufnehmen“ für den ganzen Ordner -->
+        <div id="markActions" class="mark-actions" style="display: none">
+          <button
+            id="markAllBtn"
+            type="button"
+            class="mark-tile"
+            title="Nimmt alle Bilder dieses Ordners in ZIP & CSV auf. Bilder mit Prüfhinweis bleiben ausgeschlossen und müssen einzeln angehakt werden."
+            onclick="bulkMark(true)"
+          >
+            ☑ Alle markieren
+          </button>
+          <button
+            id="unmarkAllBtn"
+            type="button"
+            class="mark-tile"
+            title="Nimmt alle Bilder dieses Ordners aus ZIP & CSV heraus. Die Bilder bleiben in der Galerie."
+            onclick="bulkMark(false)"
+          >
+            ☐ Markierung aufheben
+          </button>
+        </div>
+        <a
+          id="folderZip"
+          class="btn-link"
+          style="margin-left: auto"
+          href="api/gallery/zip?category=all"
+          download
+        >
           Als ZIP herunterladen
         </a>
       </div>
@@ -202,7 +229,83 @@
             ? `Alle als ZIP (${exportable} Bilder inkl. CSV${excludedText})`
             : `Ordner als ZIP (${exportable} Bilder inkl. CSV${excludedText})`;
         zip.style.display = loaded && exportable ? '' : 'none';
+        updateMarkButtons(images);
         return count;
+      }
+
+      // Sammel-Markierung läuft (verhindert Doppelklicks, beide Kacheln gesperrt)
+      let markBusy = false;
+
+      // Gleiche Regel wie im Backend (lib/adobe.js planBulkExport): „Alle markieren“ lässt
+      // ausgeschlossene Bilder mit Prüfhinweis aus; die Zahlen in Klammern sind die Bilder,
+      // die sich durch einen Klick ändern würden.
+      function updateMarkButtons(images) {
+        const toMark = images.filter(
+          (img) => isExcluded(img) && !hasWarning(img.metadata?.complianceWarning),
+        ).length;
+        const toUnmark = images.filter((img) => !isExcluded(img)).length;
+        document.getElementById('markActions').style.display =
+          loaded && images.length ? '' : 'none';
+        const markBtn = document.getElementById('markAllBtn');
+        markBtn.textContent = `☑ Alle markieren${toMark ? ` (${toMark})` : ''}`;
+        markBtn.disabled = markBusy || !toMark;
+        const unmarkBtn = document.getElementById('unmarkAllBtn');
+        unmarkBtn.textContent = `☐ Markierung aufheben${toUnmark ? ` (${toUnmark})` : ''}`;
+        unmarkBtn.disabled = markBusy || !toUnmark;
+      }
+
+      /**
+       * Setzt bzw. entfernt „In ZIP & CSV für Adobe aufnehmen“ für alle Bilder des
+       * angezeigten Ordners (Server speichert, eine Anfrage für den ganzen Ordner).
+       * Aktualisiert nur die betroffenen Karten, damit laufende Metadaten-Abfragen
+       * und Hinweise auf anderen Karten erhalten bleiben.
+       */
+      async function bulkMark(include) {
+        if (markBusy || !loaded) return;
+        const folder = currentFolder();
+        markBusy = true;
+        updateFolderHeader();
+        try {
+          const result = await postJson('api/gallery/export', {
+            category: String(folder),
+            include,
+          });
+          const changed = new Set(result.changed);
+          for (const img of gallery.images) {
+            if (!changed.has(img.fileName)) continue;
+            img.exportExcluded = !include;
+            const card = [...document.querySelectorAll('#grid .img-card')].find(
+              (c) => c.dataset.file === img.fileName,
+            );
+            if (card) {
+              card.classList.toggle('excluded', isExcluded(img));
+              card.querySelector('.export-box').innerHTML = renderExportToggle(img);
+            }
+          }
+          const n = result.changed.length;
+          const bilder = (k) => `${k} ${k === 1 ? 'Bild' : 'Bilder'}`;
+          const skipped = result.skippedWarning.length;
+          if (include) {
+            setStatus(
+              (n ? `${bilder(n)} für ZIP & CSV markiert.` : 'Keine weiteren Bilder zu markieren.') +
+                (skipped
+                  ? ` ${bilder(skipped)} mit Prüfhinweis nicht markiert – bitte einzeln prüfen und anhaken.`
+                  : ''),
+            );
+          } else {
+            setStatus(
+              n
+                ? `Markierung bei ${n === 1 ? '1 Bild' : `${n} Bildern`} aufgehoben.`
+                : 'Kein Bild war markiert.',
+            );
+          }
+        } catch (err) {
+          setStatus('Fehler bei der Markierung: ' + err.message);
+        } finally {
+          markBusy = false;
+          updateFolderHeader();
+          renderExports();
+        }
       }
 
       // Gleiche Regel wie im Backend (lib/adobe.js isExportExcluded)

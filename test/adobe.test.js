@@ -9,6 +9,7 @@ import {
   csvFileName,
   hasComplianceWarning,
   isExportExcluded,
+  planBulkExport,
 } from '../lib/adobe.js';
 
 test('21 Kategorien mit stabilen Eckwerten', () => {
@@ -157,4 +158,35 @@ test('Export-Dateinamen: CSV nutzt dieselben Namen wie das ZIP', () => {
     .map((row) => JSON.parse(row.split(',')[0]));
   assert.deepEqual(csvNames, [names.get('a.jpg'), names.get('b.jpg')]);
   assert.deepEqual(csvNames, ['Gleich.jpg', 'Gleich_2.jpg']);
+});
+
+test('Sammel-Markierung: Alle markieren lässt Bilder mit Prüfhinweis aus', () => {
+  const warn = { complianceWarning: 'Logo visible' };
+  const images = [
+    { fileName: 'a.jpg', metadata: null, exportExcluded: true }, // manuell aus -> an
+    { fileName: 'b.jpg', metadata: null }, // schon im Export -> keine Änderung
+    { fileName: 'c.jpg', metadata: warn }, // automatisch aus -> bleibt aus
+    { fileName: 'd.jpg', metadata: warn, exportExcluded: true }, // manuell aus + Hinweis -> bleibt aus
+    { fileName: 'e.jpg', metadata: warn, exportExcluded: false }, // bewusst an -> keine Änderung
+    { fileName: 'a.jpg', metadata: null, exportExcluded: true }, // doppelt -> nur einmal
+  ];
+  assert.deepEqual(planBulkExport(images, true), {
+    change: ['a.jpg'],
+    skippedWarning: ['c.jpg', 'd.jpg'],
+  });
+});
+
+test('Sammel-Markierung: Markierung aufheben schließt alle aktuell aufgenommenen aus', () => {
+  const warn = { complianceWarning: 'Logo visible' };
+  const images = [
+    { fileName: 'a.jpg', metadata: null, exportExcluded: true },
+    { fileName: 'b.jpg', metadata: null },
+    { fileName: 'c.jpg', metadata: warn },
+    { fileName: 'e.jpg', metadata: warn, exportExcluded: false },
+  ];
+  assert.deepEqual(planBulkExport(images, false), {
+    change: ['b.jpg', 'e.jpg'],
+    skippedWarning: [],
+  });
+  assert.deepEqual(planBulkExport(undefined, true), { change: [], skippedWarning: [] });
 });
