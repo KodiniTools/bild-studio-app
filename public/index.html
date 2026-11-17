@@ -72,7 +72,8 @@
           Status & Bilder aktualisieren
         </button>
       </div>
-      <div id="jobsContainer" style="margin-top: 12px"></div>
+      <!-- Eigener Scrollbereich: Prompt-Feld und Kopfzeile bleiben erreichbar -->
+      <div id="jobsContainer" class="jobs-scroll"></div>
     </div>
 
     <script src="common.js"></script>
@@ -254,6 +255,18 @@
         link.title = 'Bereits angeklickt';
       }
 
+      // Datum und Uhrzeit je Auftrag: wann er abgesendet wurde und (falls bekannt) wann
+      // zuletzt Bilder dazu abgerufen wurden
+      function jobTimesHtml(job, imageCount) {
+        const parts = [];
+        const created = formatDateTime(job.createdAt);
+        if (created) parts.push(`Erstellt: ${created}`);
+        const fetched =
+          imageCount && Number(job.lastFetch?.added) > 0 ? formatDateTime(job.lastFetch.at) : '';
+        if (fetched) parts.push(`Bilder abgerufen: ${fetched}`);
+        return parts.length ? `<div class="job-time">${esc(parts.join(' · '))}</div>` : '';
+      }
+
       function renderJobs() {
         const seen = readSeenJobs();
         return allJobs
@@ -267,6 +280,7 @@
           <div>
             <strong>${esc(job.name)}</strong> <span class="badge">${esc(job.state)}</span>
             <span style="font-size: 13px; color: #475569;">(${esc(job.count)} Bilder | ${esc(job.imageSize || '2K')} | ${esc(job.aspectRatio || '3:2')})</span>
+            ${jobTimesHtml(job, imageCount)}
             ${
               incomplete
                 ? `<div class="job-hint" style="font-size: 13px; color: #b45309; margin-top: 4px;">${esc(missingImagesHint(job, imageCount))}</div>`

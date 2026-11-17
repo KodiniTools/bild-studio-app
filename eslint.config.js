@@ -56,6 +56,7 @@ export default [
         postJson: 'readonly',
         canPickSaveLocation: 'readonly',
         downloadViaLink: 'readonly',
+        formatDateTime: 'readonly',
         responseErrorText: 'readonly',
         saveWithDialog: 'readonly',
       },
