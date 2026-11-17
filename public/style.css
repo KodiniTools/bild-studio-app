@@ -341,3 +341,22 @@ textarea#promptInput {
   border-color: #2563eb;
   opacity: 1;
 }
+
+/* Galerie: Ordner „Korrektur nötig“ und Knöpfe zum Verschieben */
+.folder.correction {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+.folder.correction.active {
+  border-color: #d97706;
+  background: #fef3c7;
+}
+.correction-tile {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+.correction-btn {
+  width: 100%;
+  margin-top: 8px;
+  font-size: 13px;
+}
