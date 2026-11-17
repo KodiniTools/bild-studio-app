@@ -108,3 +108,15 @@ test('Doppelklick: zweiter Aufruf öffnet keinen zweiten Dialog', async () => {
   assert.equal(await first, 'a.zip');
   assert.equal(opened, 1);
 });
+
+test('formatDateTime: deutsches Format in Schweizer Zeit, leer bei fehlendem Wert', () => {
+  const { formatDateTime } = load();
+  // UTC 17:07 = 18:07 in Zürich (Winterzeit), UTC 22:30 am 30.06. = 00:30 am 01.07. (Sommerzeit)
+  assert.equal(formatDateTime('2026-11-17T17:07:00.000Z'), '17.11.2026, 18:07');
+  assert.equal(formatDateTime('2026-06-30T22:30:00.000Z'), '01.07.2026, 00:30');
+  assert.equal(formatDateTime(Date.UTC(2026, 0, 5, 8, 3)), '05.01.2026, 09:03');
+  assert.equal(formatDateTime(undefined), '');
+  assert.equal(formatDateTime(null), '');
+  assert.equal(formatDateTime(''), '');
+  assert.equal(formatDateTime('kaputt'), '');
+});
