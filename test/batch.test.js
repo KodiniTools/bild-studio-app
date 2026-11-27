@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { batchFileName, batchImageIndex, failureReason } from '../lib/batch.js';
+import {
+  batchFileName,
+  batchImageIndex,
+  failureReason,
+  isListedJob,
+  planJobRemoval,
+} from '../lib/batch.js';
 import { createMutex } from '../lib/refresh.js';
 
 const JOB = 'batches/abc-1';
@@ -52,4 +58,71 @@ test('createMutex: Aufgaben laufen nacheinander, auch nach einem Fehler', async 
   await assert.rejects(b, /b/);
   assert.equal(await c, 'c');
   assert.deepEqual(order, ['start a', 'ende a', 'start b', 'ende b', 'start c', 'ende c']);
+});
+
+const removalJobs = () => [
+  {
+    name: 'batches/ok',
+    state: 'JOB_STATE_SUCCEEDED',
+    images: [{ fileName: 'ok_0.png' }, { fileName: 'ok_1.png' }],
+  },
+  { name: 'batches/leer', state: 'JOB_STATE_FAILED', images: [] },
+  { name: 'batches/laeuft', state: 'JOB_STATE_RUNNING', images: [] },
+  {
+    name: 'batches/weg',
+    state: 'JOB_STATE_SUCCEEDED',
+    removed: true,
+    images: [{ fileName: 'weg_0.png' }],
+  },
+];
+
+test('planJobRemoval: Bilder behalten -> Auftrag versteckt, leere Aufträge ganz weg, laufende bleiben', () => {
+  const input = removalJobs();
+  const plan = planJobRemoval(
+    input,
+    ['batches/ok', 'batches/leer', 'batches/laeuft', 'batches/unbekannt'],
+    { now: '2026-11-27T19:00:00.000Z' },
+  );
+  assert.deepEqual(plan.removed, ['batches/ok', 'batches/leer']);
+  assert.deepEqual(plan.skipped, [
+    { name: 'batches/laeuft', reason: 'läuft noch' },
+    { name: 'batches/unbekannt', reason: 'nicht gefunden' },
+  ]);
+  assert.deepEqual(plan.filesToDelete, []);
+  assert.deepEqual(
+    plan.jobs.map((j) => [j.name, j.removed === true]),
+    [
+      ['batches/ok', true],
+      ['batches/laeuft', false],
+      ['batches/weg', true],
+    ],
+  );
+  // Bilder (inkl. Metadaten) bleiben am Auftrag, Eingabe wird nicht verändert
+  assert.equal(plan.jobs[0].images.length, 2);
+  assert.equal(plan.jobs[0].removedAt, '2026-11-27T19:00:00.000Z');
+  assert.equal(input[0].removed, undefined);
+  assert.deepEqual(
+    plan.jobs.filter(isListedJob).map((j) => j.name),
+    ['batches/laeuft'],
+  );
+});
+
+test('planJobRemoval: mit Bildern löschen -> Auftrag weg, Dateien zum Löschen', () => {
+  const jobs = removalJobs();
+  // Gleiche Datei in einem anderen, verbleibenden Auftrag: nicht löschen
+  jobs[2].images = [{ fileName: 'ok_1.png' }];
+  const plan = planJobRemoval(jobs, ['batches/ok', 'batches/weg'], { deleteImages: true });
+  assert.deepEqual(plan.removed, ['batches/ok']);
+  assert.deepEqual(plan.skipped, [{ name: 'batches/weg', reason: 'nicht gefunden' }]);
+  assert.deepEqual(plan.filesToDelete, ['ok_0.png']);
+  assert.deepEqual(
+    plan.jobs.map((j) => j.name),
+    ['batches/leer', 'batches/laeuft', 'batches/weg'],
+  );
+  assert.deepEqual(planJobRemoval(undefined, undefined), {
+    jobs: [],
+    removed: [],
+    skipped: [],
+    filesToDelete: [],
+  });
 });

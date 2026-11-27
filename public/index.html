@@ -72,6 +72,31 @@
           Status & Bilder aktualisieren
         </button>
       </div>
+      <!-- Aufträge aus der Liste entfernen (alle oder ausgewählte) -->
+      <div id="jobsToolbar" class="row jobs-toolbar" style="display: none">
+        <label class="export-toggle" style="margin: 0">
+          <input id="selectAllJobs" type="checkbox" onchange="selectAllJobs(this.checked)" />
+          Alle fertigen auswählen
+        </label>
+        <label
+          class="export-toggle"
+          style="margin: 0"
+          title="Ohne Haken bleiben die Bilder samt Titel und Keywords in der Galerie."
+        >
+          <input id="removeWithImages" type="checkbox" onchange="updateJobsToolbar()" />
+          Bilder dieser Aufträge ebenfalls löschen
+        </label>
+        <button
+          id="removeJobsBtn"
+          class="danger"
+          style="margin-left: auto"
+          onclick="removeSelectedJobs()"
+          disabled
+        >
+          Ausgewählte entfernen
+        </button>
+      </div>
+      <div id="jobsStatus" class="status-msg"></div>
       <!-- Eigener Scrollbereich: Prompt-Feld und Kopfzeile bleiben erreichbar -->
       <div id="jobsContainer" class="jobs-scroll"></div>
     </div>
@@ -203,12 +228,114 @@
           container.innerHTML = allJobs.length
             ? `${errorHtml}<p style="color:#64748b;">Angezeigt wird der zuletzt geladene Stand.</p>${renderJobs()}`
             : errorHtml;
+          updateJobsToolbar();
           return;
         }
 
-        container.innerHTML = allJobs.length
-          ? renderJobs()
-          : '<p style="color:#64748b;">Noch keine Batch-Aufträge vorhanden.</p>';
+        showJobs();
+      }
+
+      function showJobs(prefixHtml = '') {
+        document.getElementById('jobsContainer').innerHTML = allJobs.length
+          ? prefixHtml + renderJobs()
+          : prefixHtml + '<p style="color:#64748b;">Noch keine Batch-Aufträge vorhanden.</p>';
+        updateJobsToolbar();
+      }
+
+      // --- Aufträge entfernen ----------------------------------------------------------
+      // Nur fertige Aufträge (Endzustand) lassen sich entfernen; laufende bleiben stehen,
+      // sonst gingen ihre Bilder verloren. Gleiche Liste wie lib/batch.js TERMINAL_JOB_STATES.
+      const TERMINAL_JOB_STATES = new Set([
+        'JOB_STATE_SUCCEEDED',
+        'JOB_STATE_FAILED',
+        'JOB_STATE_CANCELLED',
+        'JOB_STATE_EXPIRED',
+      ]);
+      const isRemovableJob = (job) => TERMINAL_JOB_STATES.has(job.state);
+      const selectedJobs = new Set();
+      let jobsRemoving = false;
+
+      function setJobsStatus(text) {
+        document.getElementById('jobsStatus').textContent = text;
+      }
+
+      function toggleJobSelection(checkbox) {
+        if (checkbox.checked) selectedJobs.add(checkbox.dataset.job);
+        else selectedJobs.delete(checkbox.dataset.job);
+        updateJobsToolbar();
+      }
+
+      function selectAllJobs(checked) {
+        selectedJobs.clear();
+        if (checked) for (const job of allJobs.filter(isRemovableJob)) selectedJobs.add(job.name);
+        for (const box of document.querySelectorAll('#jobsContainer .job-select')) {
+          box.checked = selectedJobs.has(box.dataset.job);
+        }
+        updateJobsToolbar();
+      }
+
+      // Auswahl an die aktuelle Liste anpassen und Knopf/Zähler aktualisieren
+      function updateJobsToolbar() {
+        const removable = allJobs.filter(isRemovableJob);
+        const names = new Set(removable.map((j) => j.name));
+        for (const name of [...selectedJobs]) if (!names.has(name)) selectedJobs.delete(name);
+        document.getElementById('jobsToolbar').style.display = removable.length ? '' : 'none';
+        const all = document.getElementById('selectAllJobs');
+        all.checked = removable.length > 0 && selectedJobs.size === removable.length;
+        all.indeterminate = selectedJobs.size > 0 && selectedJobs.size < removable.length;
+        const withImages = document.getElementById('removeWithImages').checked;
+        const btn = document.getElementById('removeJobsBtn');
+        const n = selectedJobs.size;
+        btn.textContent = n
+          ? `${n} ${n === 1 ? 'Auftrag' : 'Aufträge'} ${withImages ? 'und Bilder löschen' : 'entfernen'}`
+          : 'Ausgewählte entfernen';
+        btn.disabled = jobsRemoving || !n;
+      }
+
+      async function removeSelectedJobs() {
+        const names = [...selectedJobs];
+        if (!names.length || jobsRemoving) return;
+        const withImages = document.getElementById('removeWithImages').checked;
+        const imageCount = allJobs
+          .filter((j) => selectedJobs.has(j.name))
+          .reduce((sum, j) => sum + (j.images || []).length, 0);
+        const what = `${names.length} ${names.length === 1 ? 'Auftrag' : 'Aufträge'}`;
+        const question = withImages
+          ? `${what} UND ${imageCount} ${imageCount === 1 ? 'Bild' : 'Bilder'} endgültig vom Server löschen?\n\nDie Bilder verschwinden auch aus der Galerie. Das lässt sich nicht rückgängig machen.`
+          : `${what} endgültig aus der Liste entfernen?\n\nDie ${imageCount} ${imageCount === 1 ? 'Bild bleibt' : 'Bilder bleiben'} mit Titel und Keywords in der Galerie.`;
+        if (!confirm(question)) return;
+
+        jobsRemoving = true;
+        updateJobsToolbar();
+        try {
+          const result = await postJson('api/batch/remove', {
+            jobs: names,
+            deleteImages: withImages,
+          });
+          allJobs = result.jobs;
+          selectedJobs.clear();
+          document.getElementById('removeWithImages').checked = false;
+          const n = result.removed.length;
+          const parts = [
+            withImages
+              ? `${n} ${n === 1 ? 'Auftrag' : 'Aufträge'} und ${result.deletedFiles} ${result.deletedFiles === 1 ? 'Bild' : 'Bilder'} gelöscht.`
+              : `${n} ${n === 1 ? 'Auftrag' : 'Aufträge'} entfernt. Die Bilder bleiben in der Galerie.`,
+          ];
+          if (result.skipped.length) {
+            parts.push(
+              `Nicht entfernt: ${result.skipped.map((s) => `${s.name} (${s.reason})`).join(', ')}.`,
+            );
+          }
+          if (result.failedFiles.length) {
+            parts.push(`${result.failedFiles.length} Bilddateien konnten nicht gelöscht werden.`);
+          }
+          setJobsStatus(parts.join(' '));
+        } catch (err) {
+          setJobsStatus('Fehler beim Entfernen: ' + err.message);
+        } finally {
+          jobsRemoving = false;
+          showJobs();
+        }
       }
 
       // Hinweis, warum ein fertiger Auftrag weniger Bilder hat als bestellt
@@ -278,6 +405,12 @@
             return `
         <div class="job-row">
           <div>
+            ${
+              isRemovableJob(job)
+                ? `<input type="checkbox" class="job-select" data-job="${esc(job.name)}" ${selectedJobs.has(job.name) ? 'checked' : ''}
+                    onchange="toggleJobSelection(this)" title="Zum Entfernen auswählen" aria-label="Auftrag ${esc(job.name)} auswählen" />`
+                : ''
+            }
             <strong>${esc(job.name)}</strong> <span class="badge">${esc(job.state)}</span>
             <span style="font-size: 13px; color: #475569;">(${esc(job.count)} Bilder | ${esc(job.imageSize || '2K')} | ${esc(job.aspectRatio || '3:2')})</span>
             ${jobTimesHtml(job, imageCount)}
@@ -307,7 +440,6 @@
 
       // Fehlende Bilder eines fertigen Auftrags erneut bei Gemini abrufen
       async function refetchJob(btn) {
-        const container = document.getElementById('jobsContainer');
         const jobName = btn.dataset.job;
         btn.disabled = true;
         btn.textContent = 'Rufe Bilder ab …';
@@ -321,7 +453,7 @@
         } catch (err) {
           message = `<p style="color:#dc2626;">Fehler beim Abrufen der Bilder: ${esc(err.message)}</p>`;
         }
-        container.innerHTML = message + renderJobs();
+        showJobs(message);
       }
 
       renderQueue();

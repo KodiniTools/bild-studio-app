@@ -26,7 +26,14 @@ import {
   parseFolder,
 } from './lib/gallery.js';
 import { createMutex, createSingleFlight, settlesWithin } from './lib/refresh.js';
-import { batchFileName, batchImageIndex, extForMime, findImagePart } from './lib/batch.js';
+import {
+  batchFileName,
+  batchImageIndex,
+  extForMime,
+  findImagePart,
+  isListedJob,
+  planJobRemoval,
+} from './lib/batch.js';
 import { fetchBatchJob } from './lib/batch-fetch.js';
 import { MAX_UPLOAD_BYTES, detectImageType, uploadFileName } from './lib/upload.js';
 
@@ -347,7 +354,7 @@ app.get('/api/batch/status', async (req, res) => {
     // die Antwort enthält den gespeicherten Stand; der nächste Aufruf zeigt das Ergebnis
     const finished = await settlesWithin(refreshBatchJobs(), STATUS_WAIT_MS);
     if (!finished) res.set('X-Batch-Refresh', 'pending');
-    res.json(readJobs());
+    res.json(readJobs().filter(isListedJob));
   } catch (error) {
     console.error('Fehler bei Batch-Status:', error);
     res.status(500).json({ error: error.message });
@@ -413,6 +420,58 @@ const refetchBatchImages = (name) => {
   return refetchRunning.get(name);
 };
 
+// Batch-Aufträge aus der Statusliste entfernen ({ jobs: [Name, ...], deleteImages }).
+// Ohne deleteImages bleiben die Bilder samt Metadaten in der Galerie (Auftrag wird nur
+// ausgeblendet); mit deleteImages werden Auftrag und Bilddateien endgültig gelöscht.
+// Laufende Aufträge werden nicht angefasst. Bei Gemini wird nichts gelöscht.
+app.post('/api/batch/remove', (req, res) => {
+  try {
+    const { jobs: names, deleteImages = false } = req.body ?? {};
+    if (
+      !Array.isArray(names) ||
+      !names.length ||
+      names.length > 5000 ||
+      !names.every((n) => typeof n === 'string' && n)
+    ) {
+      return res.status(400).json({ error: 'Liste der Aufträge (jobs) fehlt oder ist ungültig.' });
+    }
+    if (typeof deleteImages !== 'boolean') {
+      return res.status(400).json({ error: 'deleteImages muss true oder false sein.' });
+    }
+
+    const plan = planJobRemoval(readJobs(), names, { deleteImages });
+    if (plan.removed.length) saveJobs(plan.jobs);
+
+    // Erst nach dem Speichern löschen: schlägt das Löschen einer Datei fehl, bleibt sie
+    // liegen und erscheint als Einzelbild in der Galerie (kein Datenverlust)
+    let deletedFiles = 0;
+    const failedFiles = [];
+    for (const fileName of plan.filesToDelete) {
+      if (!isSafeImageName(fileName)) continue;
+      try {
+        fs.unlinkSync(path.join(IMAGES_DIR, fileName));
+        deletedFiles++;
+      } catch (error) {
+        if (error.code !== 'ENOENT') {
+          console.error(`Bild ${fileName} konnte nicht gelöscht werden:`, error);
+          failedFiles.push(fileName);
+        }
+      }
+    }
+
+    res.json({
+      removed: plan.removed,
+      skipped: plan.skipped,
+      deletedFiles,
+      failedFiles,
+      jobs: readJobs().filter(isListedJob),
+    });
+  } catch (error) {
+    console.error('Fehler beim Entfernen von Batch-Aufträgen:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post('/api/batch/refetch', async (req, res) => {
   try {
     const name = req.body?.job;
@@ -426,7 +485,7 @@ app.post('/api/batch/refetch', async (req, res) => {
     }
 
     const finished = await settlesWithin(refetchBatchImages(name), REFETCH_WAIT_MS);
-    res.json({ pending: !finished, jobs: readJobs() });
+    res.json({ pending: !finished, jobs: readJobs().filter(isListedJob) });
   } catch (error) {
     console.error('Fehler beim erneuten Abruf:', error);
     res.status(500).json({ error: error.message });
@@ -664,7 +723,9 @@ app.get('/api/gallery', (req, res) => {
       categories: ADOBE_CATEGORIES.map((name, i) => ({ id: i + 1, name })),
       uncategorized: { id: UNCATEGORIZED, name: UNCATEGORIZED_LABEL },
       correction: { id: CORRECTION, name: CORRECTION_LABEL },
-      jobs: jobs.map((j) => ({
+      // Aus der Statusliste entfernte Aufträge erscheinen nicht unter „Downloads nach
+      // Auftrag“; ihre Bilder bleiben in der Galerie
+      jobs: jobs.filter(isListedJob).map((j) => ({
         name: j.name,
         state: j.state,
         count: j.count,
