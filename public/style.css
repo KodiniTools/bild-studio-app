@@ -469,3 +469,16 @@ body.lightbox-open {
   color: #64748b;
   margin-top: 4px;
 }
+
+/* Studio: Aufträge auswählen und entfernen */
+.jobs-toolbar {
+  align-items: center;
+  margin: 12px 0 0;
+}
+.job-select {
+  margin: 0 6px 0 0;
+  vertical-align: middle;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
